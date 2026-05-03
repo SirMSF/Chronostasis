@@ -158,6 +158,7 @@
             let gameState = 'menu';
             let difficulty = 'medium';
             let score = 0;
+            let cash = 0;
             let killCount = 0;
             let nextDarkRedScore = 1500;
             let bossActive = false;
@@ -167,6 +168,12 @@
             let slowEnergy = SLOW_MAX_ENERGY;
             let rechargeDelay = 0;
             let bossEverDefeated = false;
+
+            // ---------- Debug ----------
+            let debugMode = false;
+            let debugCodeString = '';          // used only on menu before debug enabled
+            let debugFocus = null;            // which input field is focused: 'kills', 'cash', 'score'
+            let debugInputs = { kills: '', cash: '', score: '' };
 
             let player = {
                 x: WORLD_WIDTH / 2,
@@ -179,8 +186,11 @@
             let enemies = [];
             let bullets = [];
             let missiles = [];
+            let particles = [];
             let spawnTimer = 0;
             let timeScale = 1.0;
+            let deathAnimation = null;
+            let controlsFrozen = false;
 
             let cameraX = player.x - VIEW_W/2;
             let cameraY = player.y - VIEW_H/2;
@@ -377,9 +387,9 @@
                 if (enemies.length >= MAX_ENEMIES || bossActive) return;
                 if (bossEverDefeated) {
                     let specialChance = 0;
-                    if (difficulty === 'easy') specialChance = 0.15;
-                    else if (difficulty === 'hard') specialChance = 0.40;
-                    else specialChance = 0.25;
+                    if (difficulty === 'easy') specialChance = 0.25;
+                    else if (difficulty === 'hard') specialChance = 0.50;
+                    else specialChance = 0.35;
                     if (Math.random() < specialChance) {
                         const type = Math.random() < 0.5 ? 'green' : 'blue';
                         enemies.push(spawnSpecialEnemy(type));
@@ -434,7 +444,7 @@
             }
 
             function spawnBlackBoss() {
-                enemies = []; bullets = []; missiles = [];
+                enemies = []; bullets = []; missiles = []; particles = [];
                 bossActive = true;
                 const margin=60; let x,y, attempts=0;
                 do {
@@ -455,7 +465,7 @@
             }
 
             function spawnWhiteBoss() {
-                enemies = []; bullets = []; missiles = [];
+                enemies = []; bullets = []; missiles = []; particles = [];
                 bossActive = true;
                 const margin=50; let x,y, attempts=0;
                 do {
@@ -482,20 +492,118 @@
             function restartGame() {
                 player.x = WORLD_WIDTH/2; player.y = WORLD_HEIGHT/2;
                 player.vx=0; player.vy=0; player.shootTimer=0;
-                bullets=[]; missiles=[]; enemies=[]; score=0; killCount=0;
+                bullets=[]; missiles=[]; particles=[]; enemies=[]; score=0; cash=0; killCount=0;
                 nextDarkRedScore=1500;
                 bossActive=false; boss=null; bossEverDefeated = false;
                 bossType = 'black';
                 spawnTimer=0; slowMode = false;
                 slowEnergy = SLOW_MAX_ENERGY; rechargeDelay = 0;
+                deathAnimation = null; controlsFrozen = false;
                 applyDifficulty();
                 gameState='playing';
                 for (let i=0;i<5;i++) spawnEnemy();
             }
 
+            // ---------- Boss death animation ----------
+            function startBossDeathAnimation() {
+                if (!boss) return;
+
+                player.vx = 0;
+                player.vy = 0;
+                controlsFrozen = true;
+                bullets = [];
+                missiles = [];
+
+                deathAnimation = {
+                    active: true,
+                    phase: 'freeze',
+                    timer: 0,
+                    freezeDuration: 2.0,
+                    shakeDuration: 1.0,
+                    boss: boss,
+                    bossStartPos: { x: boss.x, y: boss.y },
+                    shakeOffsetX: 0,
+                    shakeOffsetY: 0
+                };
+            }
+
+            function spawnSmokeParticles(x, y, count) {
+                for (let i = 0; i < count; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 20 + Math.random() * 60;
+                    particles.push({
+                        x: x,
+                        y: y,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        life: 0.8 + Math.random() * 1.2,
+                        maxLife: 0.8 + Math.random() * 1.2,
+                        radius: 3 + Math.random() * 12,
+                        color: `rgba(180,180,180,${0.6 + Math.random() * 0.4})`
+                    });
+                }
+            }
+
+            // ---------- Debug Helpers ----------
+            function applyDebugValues() {
+                const killsVal = parseInt(debugInputs.kills, 10);
+                const cashVal = parseInt(debugInputs.cash, 10);
+                const scoreVal = parseInt(debugInputs.score, 10);
+                if (!isNaN(killsVal) && killsVal >= 0) killCount = killsVal;
+                if (!isNaN(cashVal) && cashVal >= 0) cash = cashVal;
+                if (!isNaN(scoreVal) && scoreVal >= 0) score = scoreVal;
+                // Update the input fields to reflect current values
+                debugInputs.kills = killCount.toString();
+                debugInputs.cash = cash.toString();
+                debugInputs.score = score.toString();
+                debugFocus = null;
+            }
+
             // ---------- Update ----------
             function update(realDeltaSec) {
                 if (gameState !== 'playing') return;
+
+                if (deathAnimation && deathAnimation.active) {
+                    deathAnimation.timer += realDeltaSec;
+                    player.vx = 0;
+                    player.vy = 0;
+                    controlsFrozen = true;
+
+                    if (deathAnimation.phase === 'freeze') {
+                        deathAnimation.boss.x = deathAnimation.bossStartPos.x;
+                        deathAnimation.boss.y = deathAnimation.bossStartPos.y;
+                        if (deathAnimation.timer >= deathAnimation.freezeDuration) {
+                            deathAnimation.phase = 'shake';
+                            deathAnimation.timer = 0;
+                        }
+                    }
+                    else if (deathAnimation.phase === 'shake') {
+                        deathAnimation.shakeOffsetX = (Math.random() - 0.5) * 12;
+                        deathAnimation.shakeOffsetY = (Math.random() - 0.5) * 12;
+                        if (deathAnimation.timer >= deathAnimation.shakeDuration) {
+                            spawnSmokeParticles(deathAnimation.boss.x, deathAnimation.boss.y, 30);
+                            const bossRef = deathAnimation.boss;
+                            score += (bossRef.type === 'black' ? 1500 : 500);
+                            cash += 10;
+                            bossActive = false;
+                            boss = null;
+                            killCount = 0;
+                            bossEverDefeated = true;
+                            bossType = bossType === 'black' ? 'white' : 'black';
+                            playEnemyKill();
+                            deathAnimation = null;
+                            controlsFrozen = false;
+                        }
+                    }
+                    for (let i = particles.length - 1; i >= 0; i--) {
+                        const p = particles[i];
+                        p.x += p.vx * realDeltaSec;
+                        p.y += p.vy * realDeltaSec;
+                        p.life -= realDeltaSec;
+                        if (p.life <= 0) particles.splice(i, 1);
+                    }
+                    return;
+                }
 
                 // --- Shift energy system ---
                 if (slowMode) {
@@ -514,10 +622,12 @@
 
                 let effectiveMaxSpeed = slowMode ? PLAYER_MAX_SPEED * 0.5 : PLAYER_MAX_SPEED;
                 let inputX=0,inputY=0;
-                if (keys.w || keys.ArrowUp) inputY -= 1;
-                if (keys.s || keys.ArrowDown) inputY += 1;
-                if (keys.a || keys.ArrowLeft) inputX -= 1;
-                if (keys.d || keys.ArrowRight) inputX += 1;
+                if (!controlsFrozen && debugFocus === null) {
+                    if (keys.w || keys.ArrowUp) inputY -= 1;
+                    if (keys.s || keys.ArrowDown) inputY += 1;
+                    if (keys.a || keys.ArrowLeft) inputX -= 1;
+                    if (keys.d || keys.ArrowRight) inputX += 1;
+                }
                 if (inputX||inputY) { const l=Math.sqrt(inputX*inputX+inputY*inputY); inputX/=l; inputY/=l; }
 
                 if (inputX||inputY) {
@@ -555,6 +665,14 @@
                 timeScale = slowMode ? 0.5 : (0.1 + 0.9 * speedRatio);
                 const gameDelta = realDeltaSec * timeScale;
                 updateAmbient(speedRatio);
+
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    const p = particles[i];
+                    p.x += p.vx * realDeltaSec;
+                    p.y += p.vy * realDeltaSec;
+                    p.life -= realDeltaSec;
+                    if (p.life <= 0) particles.splice(i, 1);
+                }
 
                 if (bossActive && boss) {
                     const bossDelta = realDeltaSec * timeScale;
@@ -714,18 +832,20 @@
                 }
 
                 if (gameDelta > 0) {
-                    if (player.shootTimer > 0) player.shootTimer -= gameDelta;
-                    if (mouseDown && player.shootTimer <= 0) {
-                        const baseAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
-                        const spreadAngle = (Math.random() - 0.5) * 2 * PLAYER_SPREAD;
-                        bullets.push({
-                            x: player.x, y: player.y,
-                            vx: Math.cos(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
-                            vy: Math.sin(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
-                            radius: BULLET_RADIUS, owner: 'player'
-                        });
-                        player.shootTimer = PLAYER_SHOOT_COOLDOWN;
-                        playPlayerShoot();
+                    if (!controlsFrozen && debugFocus === null) {
+                        if (player.shootTimer > 0) player.shootTimer -= gameDelta;
+                        if (mouseDown && player.shootTimer <= 0) {
+                            const baseAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
+                            const spreadAngle = (Math.random() - 0.5) * 2 * PLAYER_SPREAD;
+                            bullets.push({
+                                x: player.x, y: player.y,
+                                vx: Math.cos(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
+                                vy: Math.sin(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
+                                radius: BULLET_RADIUS, owner: 'player'
+                            });
+                            player.shootTimer = PLAYER_SHOOT_COOLDOWN;
+                            playPlayerShoot();
+                        }
                     }
 
                     for (let i = bullets.length-1; i >= 0; i--) {
@@ -916,16 +1036,12 @@
                                 if (boss.type === 'black' || (boss.type === 'white' && !boss.isDashing)) {
                                     boss.hp--;
                                     if (boss.hp <= 0) {
-                                        score += (boss.type === 'black' ? 1500 : 500);
-                                        bossActive = false; boss = null;
-                                        killCount = 0;
-                                        bossEverDefeated = true;
-                                        bossType = bossType === 'black' ? 'white' : 'black';
-                                        playEnemyKill();
+                                        startBossDeathAnimation();
+                                        break;
                                     } else {
                                         playEnemyHit();
+                                        bullets.splice(b,1);
                                     }
-                                    bullets.splice(b,1);
                                     break;
                                 }
                             }
@@ -958,6 +1074,13 @@
                     for (const eIdx of enemiesToRemove.sort((a,b)=>b-a)) {
                         if (eIdx >= 0 && eIdx < enemies.length) {
                             const deadEnemy = enemies[eIdx];
+                            if (deadEnemy.isDarkRed) {
+                                cash += 5;
+                            } else if (deadEnemy.specialType === 'green' || deadEnemy.specialType === 'blue') {
+                                cash += 3;
+                            } else {
+                                cash += deadEnemy.maxHp;
+                            }
                             score += 100 * deadEnemy.maxHp;
                             killCount++;
                             enemies.splice(eIdx, 1);
@@ -1021,28 +1144,106 @@
             }
 
             // ---------- Render ----------
+            function drawDebugPanel() {
+                if (!debugMode) return;
+                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
+                // Background
+                ctx.fillStyle = 'rgba(20, 20, 40, 0.85)';
+                ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+
+                // Title
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 14px "Courier New"';
+                ctx.textAlign = 'left';
+                ctx.fillText('DEBUG MODE', panel.x + 10, panel.y + 20);
+
+                // Input fields
+                ctx.font = '13px "Courier New"';
+                const labels = ['Kills:', 'Cash:', 'Score:'];
+                const keys = ['kills', 'cash', 'score'];
+                for (let i = 0; i < 3; i++) {
+                    const y = panel.y + 40 + i * 30;
+                    ctx.fillStyle = '#ccc';
+                    ctx.fillText(labels[i], panel.x + 10, y + 15);
+                    const inputX = panel.x + 70;
+                    const inputY = y;
+                    const inputW = 150;
+                    const inputH = 20;
+
+                    // Input box
+                    ctx.fillStyle = '#111';
+                    ctx.fillRect(inputX, inputY, inputW, inputH);
+                    ctx.strokeStyle = debugFocus === keys[i] ? '#90EE90' : '#444';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(inputX, inputY, inputW, inputH);
+
+                    // Text inside
+                    ctx.fillStyle = '#90EE90';
+                    ctx.textAlign = 'left';
+                    let displayVal = debugInputs[keys[i]];
+                    if (debugFocus === keys[i]) displayVal += '_';
+                    ctx.fillText(displayVal, inputX + 5, inputY + 15);
+                }
+
+                // Set button
+                const btnX = panel.x + 60;
+                const btnY = panel.y + 115;
+                const btnW = 120;
+                const btnH = 25;
+                ctx.fillStyle = '#2a4a2a';
+                ctx.fillRect(btnX, btnY, btnW, btnH);
+                ctx.strokeStyle = '#90EE90';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(btnX, btnY, btnW, btnH);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 14px "Courier New"';
+                ctx.textAlign = 'center';
+                ctx.fillText('SET', btnX + btnW/2, btnY + 18);
+            }
+
+            function isInsideDebugPanel(mx, my) {
+                if (!debugMode) return false;
+                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
+                return mx >= panel.x && mx <= panel.x + panel.w && my >= panel.y && my <= panel.y + panel.h;
+            }
+
+            function getDebugFieldAt(mx, my) {
+                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
+                const fieldH = 20;
+                const keys = ['kills', 'cash', 'score'];
+                for (let i = 0; i < 3; i++) {
+                    const y = panel.y + 40 + i * 30;
+                    const inputX = panel.x + 70;
+                    if (mx >= inputX && mx <= inputX + 150 && my >= y && my <= y + fieldH) {
+                        return keys[i];
+                    }
+                }
+                // Check SET button
+                const btnX = panel.x + 60;
+                const btnY = panel.y + 115;
+                const btnW = 120, btnH = 25;
+                if (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
+                    return 'set';
+                }
+                return null;
+            }
+
             function draw() {
                 ctx.clearRect(0,0,VIEW_W,VIEW_H);
                 if (gameState === 'menu') {
-                    // Background
                     ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,VIEW_W,VIEW_H);
-
-                    // Developer credit at the top
                     ctx.fillStyle = '#aaaaaa';
                     ctx.font = '18px "Courier New"';
                     ctx.textAlign = 'center';
                     ctx.fillText('Developed by Muhammad Shayan Faheem', VIEW_W/2, 40);
-
-                    // Title
                     ctx.fillStyle = '#ffffff';
                     ctx.font = 'bold 48px "Courier New"';
                     ctx.fillText('CHRONOSTASIS', VIEW_W/2, 150);
-
-                    // Select difficulty
                     ctx.font = '24px "Courier New"';
                     ctx.fillText('Select Difficulty', VIEW_W/2, 230);
-
-                    // Difficulty buttons
                     const btnW = 200, btnH = 50, startY = 300, gap = 30;
                     const buttons = [
                         { text:'EASY', diff:'easy', y:startY },
@@ -1056,188 +1257,219 @@
                         ctx.fillStyle = '#ffffff'; ctx.font = '20px "Courier New"';
                         ctx.fillText(btn.text, VIEW_W/2, btn.y+btnH/2+7);
                     }
-
-                    // Instruction
                     ctx.fillStyle = '#aaa'; ctx.font = '16px "Courier New"';
                     ctx.fillText('Click difficulty to start', VIEW_W/2, startY+(btnH+gap)*3+30);
-                    return;
+
+                    // Debug code input (only if not already debug mode)
+                    if (!debugMode) {
+                        ctx.fillStyle = '#444';
+                        ctx.font = '12px "Courier New"';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Debug: ' + debugCodeString + '_', 10, 20);
+                    }
+                    // If debug mode is on, panel is drawn later
                 }
 
-                // ... (rest of the game rendering unchanged)
-                const gridSize = CELL_SIZE;
-                ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
-                const startX = Math.floor(cameraX / gridSize) * gridSize;
-                const startY = Math.floor(cameraY / gridSize) * gridSize;
-                for (let wx = startX; wx < cameraX+VIEW_W+gridSize; wx += gridSize) {
-                    const sx = wx - cameraX; ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,VIEW_H); ctx.stroke();
-                }
-                for (let wy = startY; wy < cameraY+VIEW_H+gridSize; wy += gridSize) {
-                    const sy = wy - cameraY; ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(VIEW_W,sy); ctx.stroke();
-                }
-                ctx.fillStyle = '#2a2a4a'; ctx.strokeStyle = '#4a4a7a'; ctx.lineWidth = 2;
-                for (const w of walls) {
-                    const sx = w.x - cameraX, sy = w.y - cameraY;
-                    if (sx+w.w < 0 || sx > VIEW_W || sy+w.h < 0 || sy > VIEW_H) continue;
-                    ctx.fillRect(sx, sy, w.w, w.h); ctx.strokeRect(sx, sy, w.w, w.h);
-                }
-                for (const b of bullets) {
-                    const sx = b.x - cameraX, sy = b.y - cameraY;
-                    if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
-                    ctx.beginPath(); ctx.arc(sx,sy,b.radius,0,Math.PI*2);
-                    ctx.fillStyle = b.owner==='player'?'#ffdd44':'#ff3366'; ctx.fill();
-                }
-                for (const m of missiles) {
-                    const sx = m.x - cameraX, sy = m.y - cameraY;
-                    if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
-                    ctx.beginPath(); ctx.arc(sx,sy,m.radius,0,Math.PI*2);
-                    ctx.fillStyle = '#ff6600';
-                    ctx.fill();
-                    ctx.beginPath(); ctx.arc(sx - m.vx * 0.02, sy - m.vy * 0.02, m.radius * 0.6, 0, Math.PI*2);
-                    ctx.fillStyle = '#ff9933'; ctx.fill();
-                }
-                for (const en of enemies) {
-                    const sx = en.x - cameraX, sy = en.y - cameraY;
-                    if (sx<-40||sx>VIEW_W+40||sy<-40||sy>VIEW_H+40) continue;
-                    let bodyColor;
-                    if (en.isDarkRed) bodyColor = '#5a1a1a';
-                    else if (en.specialType === 'green') bodyColor = '#00cc44';
-                    else if (en.specialType === 'blue') bodyColor = '#3366ff';
-                    else {
-                        switch(en.hp) {
-                            case 3: bodyColor = '#ff3333'; break;
-                            case 2: bodyColor = '#ff9933'; break;
-                            case 1: bodyColor = '#ffdd44'; break;
-                            default: bodyColor = '#fff';
-                        }
+                // Game rendering only if playing or gameover
+                if (gameState === 'playing' || gameState === 'gameover') {
+                    const gridSize = CELL_SIZE;
+                    ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
+                    const startX = Math.floor(cameraX / gridSize) * gridSize;
+                    const startY = Math.floor(cameraY / gridSize) * gridSize;
+                    for (let wx = startX; wx < cameraX+VIEW_W+gridSize; wx += gridSize) {
+                        const sx = wx - cameraX; ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,VIEW_H); ctx.stroke();
                     }
-                    ctx.beginPath(); ctx.arc(sx, sy, en.radius, 0, Math.PI*2);
-                    ctx.fillStyle = bodyColor; ctx.fill();
-                    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
-                    ctx.font = 'bold 12px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-                    ctx.fillText('●'.repeat(en.hp), sx, sy - en.radius - 6);
-                }
-                if (bossActive && boss) {
-                    const sx = boss.x - cameraX, sy = boss.y - cameraY;
-                    if (boss.type === 'white') {
-                        ctx.save();
-                        ctx.shadowColor='rgba(255,255,255,0.9)'; ctx.shadowBlur=18;
-                        ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
-                        ctx.fillStyle='#ffffff'; ctx.fill();
-                        ctx.restore();
-                        ctx.strokeStyle='#cccccc'; ctx.lineWidth=3; ctx.stroke();
-                        ctx.font='bold 12px "Courier New"'; ctx.fillStyle='#000'; ctx.textAlign='center';
-                        ctx.fillText('WHITE BOSS', sx, sy-14);
-                    } else {
-                        ctx.fillStyle = '#0a0a0a';
-                        ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
+                    for (let wy = startY; wy < cameraY+VIEW_H+gridSize; wy += gridSize) {
+                        const sy = wy - cameraY; ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(VIEW_W,sy); ctx.stroke();
+                    }
+                    ctx.fillStyle = '#2a2a4a'; ctx.strokeStyle = '#4a4a7a'; ctx.lineWidth = 2;
+                    for (const w of walls) {
+                        const sx = w.x - cameraX, sy = w.y - cameraY;
+                        if (sx+w.w < 0 || sx > VIEW_W || sy+w.h < 0 || sy > VIEW_H) continue;
+                        ctx.fillRect(sx, sy, w.w, w.h); ctx.strokeRect(sx, sy, w.w, w.h);
+                    }
+                    for (const b of bullets) {
+                        const sx = b.x - cameraX, sy = b.y - cameraY;
+                        if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
+                        ctx.beginPath(); ctx.arc(sx,sy,b.radius,0,Math.PI*2);
+                        ctx.fillStyle = b.owner==='player'?'#ffdd44':'#ff3366'; ctx.fill();
+                    }
+                    for (const m of missiles) {
+                        const sx = m.x - cameraX, sy = m.y - cameraY;
+                        if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
+                        ctx.beginPath(); ctx.arc(sx,sy,m.radius,0,Math.PI*2);
+                        ctx.fillStyle = '#ff6600';
                         ctx.fill();
-                        ctx.strokeStyle = '#333333'; ctx.lineWidth = 4; ctx.stroke();
-                        ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 14px "Courier New"'; ctx.textAlign = 'center';
-                        ctx.fillText('BLACK BOSS', sx, sy - boss.radius - 10);
+                        ctx.beginPath(); ctx.arc(sx - m.vx * 0.02, sy - m.vy * 0.02, m.radius * 0.6, 0, Math.PI*2);
+                        ctx.fillStyle = '#ff9933'; ctx.fill();
                     }
-                }
-                const pScreenX = player.x - cameraX, pScreenY = player.y - cameraY;
-                ctx.save(); ctx.translate(pScreenX, pScreenY);
-                const aimAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
-                ctx.rotate(aimAngle);
-                ctx.beginPath(); ctx.moveTo(player.radius,0); ctx.lineTo(-player.radius*0.7,-player.radius*0.6);
-                ctx.lineTo(-player.radius*0.4,0); ctx.lineTo(-player.radius*0.7,player.radius*0.6);
-                ctx.closePath(); ctx.fillStyle='#ffffff'; ctx.fill(); ctx.strokeStyle='#aaaacc'; ctx.lineWidth=2; ctx.stroke();
-                ctx.restore();
-
-                if (timeScale < 1.0) {
-                    const alpha = (1 - (timeScale - 0.1) / 0.9) * 0.25;
-                    ctx.fillStyle = `rgba(20, 40, 100, ${alpha})`;
-                    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-                }
-
-                // Energy ring at bottom center
-                const ringCenterX = VIEW_W / 2;
-                const ringCenterY = VIEW_H - 35;
-                const ringRadius = 22;
-                const energyPercent = slowEnergy / SLOW_MAX_ENERGY;
-                let ringOpacity = 0.4;
-                if (!slowMode && slowEnergy >= SLOW_MAX_ENERGY - 0.01) {
-                    ringOpacity = 0.08;
-                } else {
-                    ringOpacity = 0.4;
-                }
-                ctx.beginPath();
-                ctx.arc(ringCenterX, ringCenterY, ringRadius, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(128, 128, 128, ${ringOpacity * 0.6})`;
-                ctx.lineWidth = 3;
-                ctx.stroke();
-                if (energyPercent > 0) {
-                    ctx.beginPath();
-                    const endAngle = -Math.PI/2 + (Math.PI * 2 * energyPercent);
-                    ctx.arc(ringCenterX, ringCenterY, ringRadius, -Math.PI/2, endAngle);
-                    ctx.strokeStyle = slowMode ? `rgba(255, 170, 0, ${ringOpacity})` : `rgba(0, 221, 255, ${ringOpacity})`;
-                    ctx.lineWidth = 4;
-                    ctx.stroke();
-                }
-
-                if (bossActive && boss) {
-                    const bx = boss.x - cameraX, by = boss.y - cameraY;
-                    const margin = 50;
-                    const isOffLeft = bx < margin, isOffRight = bx > VIEW_W - margin;
-                    const isOffTop = by < margin, isOffBottom = by > VIEW_H - margin;
-                    if (isOffLeft || isOffRight || isOffTop || isOffBottom) {
-                        const arrowColor = 'rgba(255, 100, 100, 0.9)';
-                        function drawArrow(x, y, angle) {
-                            ctx.save();
-                            ctx.translate(x, y);
-                            ctx.rotate(angle);
-                            ctx.beginPath();
-                            ctx.moveTo(0, -10);
-                            ctx.lineTo(15, 0);
-                            ctx.lineTo(0, 10);
-                            ctx.closePath();
-                            ctx.fillStyle = arrowColor;
-                            ctx.fill();
-                            ctx.strokeStyle = '#fff';
-                            ctx.lineWidth = 2;
-                            ctx.stroke();
-                            ctx.restore();
+                    for (const en of enemies) {
+                        const sx = en.x - cameraX, sy = en.y - cameraY;
+                        if (sx<-40||sx>VIEW_W+40||sy<-40||sy>VIEW_H+40) continue;
+                        let bodyColor;
+                        if (en.isDarkRed) bodyColor = '#5a1a1a';
+                        else if (en.specialType === 'green') bodyColor = '#00cc44';
+                        else if (en.specialType === 'blue') bodyColor = '#3366ff';
+                        else {
+                            switch(en.hp) {
+                                case 3: bodyColor = '#ff3333'; break;
+                                case 2: bodyColor = '#ff9933'; break;
+                                case 1: bodyColor = '#ffdd44'; break;
+                                default: bodyColor = '#fff';
+                            }
                         }
-                        if (isOffLeft) drawArrow(20, clamp(by, 50, VIEW_H-50), Math.PI*0.0);
-                        if (isOffRight) drawArrow(VIEW_W-20, clamp(by, 50, VIEW_H-50), Math.PI);
-                        if (isOffTop) drawArrow(clamp(bx, 50, VIEW_W-50), 20, Math.PI*1.5);
-                        if (isOffBottom) drawArrow(clamp(bx, 50, VIEW_W-50), VIEW_H-20, Math.PI*0.5);
+                        ctx.beginPath(); ctx.arc(sx, sy, en.radius, 0, Math.PI*2);
+                        ctx.fillStyle = bodyColor; ctx.fill();
+                        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+                        ctx.font = 'bold 12px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+                        ctx.fillText('●'.repeat(en.hp), sx, sy - en.radius - 6);
+                    }
+                    if (bossActive && boss) {
+                        let sx = boss.x - cameraX;
+                        let sy = boss.y - cameraY;
+                        if (deathAnimation && deathAnimation.active && deathAnimation.phase === 'shake') {
+                            sx += deathAnimation.shakeOffsetX;
+                            sy += deathAnimation.shakeOffsetY;
+                        }
+                        if (boss.type === 'white') {
+                            ctx.save();
+                            ctx.shadowColor='rgba(255,255,255,0.9)'; ctx.shadowBlur=18;
+                            ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
+                            ctx.fillStyle='#ffffff'; ctx.fill();
+                            ctx.restore();
+                            ctx.strokeStyle='#cccccc'; ctx.lineWidth=3; ctx.stroke();
+                            ctx.font='bold 12px "Courier New"'; ctx.fillStyle='#000'; ctx.textAlign='center';
+                            ctx.fillText('WHITE BOSS', sx, sy-14);
+                        } else {
+                            ctx.fillStyle = '#0a0a0a';
+                            ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
+                            ctx.fill();
+                            ctx.strokeStyle = '#333333'; ctx.lineWidth = 4; ctx.stroke();
+                            ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 14px "Courier New"'; ctx.textAlign = 'center';
+                            ctx.fillText('BLACK BOSS', sx, sy - boss.radius - 10);
+                        }
+                    }
+                    for (const p of particles) {
+                        const sx = p.x - cameraX, sy = p.y - cameraY;
+                        const alpha = p.life / p.maxLife;
+                        ctx.globalAlpha = alpha;
+                        ctx.beginPath();
+                        ctx.arc(sx, sy, p.radius, 0, Math.PI*2);
+                        ctx.fillStyle = p.color;
+                        ctx.fill();
+                    }
+                    ctx.globalAlpha = 1;
+
+                    const pScreenX = player.x - cameraX, pScreenY = player.y - cameraY;
+                    ctx.save(); ctx.translate(pScreenX, pScreenY);
+                    const aimAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
+                    ctx.rotate(aimAngle);
+                    ctx.beginPath(); ctx.moveTo(player.radius,0); ctx.lineTo(-player.radius*0.7,-player.radius*0.6);
+                    ctx.lineTo(-player.radius*0.4,0); ctx.lineTo(-player.radius*0.7,player.radius*0.6);
+                    ctx.closePath(); ctx.fillStyle='#ffffff'; ctx.fill(); ctx.strokeStyle='#aaaacc'; ctx.lineWidth=2; ctx.stroke();
+                    ctx.restore();
+
+                    if (timeScale < 1.0) {
+                        const alpha = (1 - (timeScale - 0.1) / 0.9) * 0.25;
+                        ctx.fillStyle = `rgba(20, 40, 100, ${alpha})`;
+                        ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+                    }
+
+                    // Energy ring
+                    const ringCenterX = VIEW_W / 2;
+                    const ringCenterY = VIEW_H - 35;
+                    const ringRadius = 22;
+                    const energyPercent = slowEnergy / SLOW_MAX_ENERGY;
+                    let ringOpacity = 0.4;
+                    if (!slowMode && slowEnergy >= SLOW_MAX_ENERGY - 0.01) {
+                        ringOpacity = 0.08;
+                    } else {
+                        ringOpacity = 0.4;
+                    }
+                    ctx.beginPath();
+                    ctx.arc(ringCenterX, ringCenterY, ringRadius, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(128, 128, 128, ${ringOpacity * 0.6})`;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                    if (energyPercent > 0) {
+                        ctx.beginPath();
+                        const endAngle = -Math.PI/2 + (Math.PI * 2 * energyPercent);
+                        ctx.arc(ringCenterX, ringCenterY, ringRadius, -Math.PI/2, endAngle);
+                        ctx.strokeStyle = slowMode ? `rgba(255, 170, 0, ${ringOpacity})` : `rgba(0, 221, 255, ${ringOpacity})`;
+                        ctx.lineWidth = 4;
+                        ctx.stroke();
+                    }
+
+                    if (bossActive && boss && !deathAnimation) {
+                        const bx = boss.x - cameraX, by = boss.y - cameraY;
+                        const margin = 50;
+                        const isOffLeft = bx < margin, isOffRight = bx > VIEW_W - margin;
+                        const isOffTop = by < margin, isOffBottom = by > VIEW_H - margin;
+                        if (isOffLeft || isOffRight || isOffTop || isOffBottom) {
+                            const arrowColor = 'rgba(255, 100, 100, 0.9)';
+                            function drawArrow(x, y, angle) {
+                                ctx.save();
+                                ctx.translate(x, y);
+                                ctx.rotate(angle);
+                                ctx.beginPath();
+                                ctx.moveTo(0, -10);
+                                ctx.lineTo(15, 0);
+                                ctx.lineTo(0, 10);
+                                ctx.closePath();
+                                ctx.fillStyle = arrowColor;
+                                ctx.fill();
+                                ctx.strokeStyle = '#fff';
+                                ctx.lineWidth = 2;
+                                ctx.stroke();
+                                ctx.restore();
+                            }
+                            if (isOffLeft) drawArrow(20, clamp(by, 50, VIEW_H-50), Math.PI*0.0);
+                            if (isOffRight) drawArrow(VIEW_W-20, clamp(by, 50, VIEW_H-50), Math.PI);
+                            if (isOffTop) drawArrow(clamp(bx, 50, VIEW_W-50), 20, Math.PI*1.5);
+                            if (isOffBottom) drawArrow(clamp(bx, 50, VIEW_W-50), VIEW_H-20, Math.PI*0.5);
+                        }
+                    }
+                    if (bossActive && boss && boss.type === 'black' && !deathAnimation) {
+                        const barWidth = 300, barHeight = 20;
+                        const barX = VIEW_W/2 - barWidth/2, barY = 20;
+                        const fillPercent = boss.hp / boss.maxHp;
+                        ctx.fillStyle = '#222';
+                        ctx.fillRect(barX, barY, barWidth, barHeight);
+                        ctx.fillStyle = '#cc2222';
+                        ctx.fillRect(barX, barY, barWidth * fillPercent, barHeight);
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+                        ctx.strokeRect(barX, barY, barWidth, barHeight);
+                        ctx.fillStyle = '#fff'; ctx.font = '14px "Courier New"'; ctx.textAlign = 'center';
+                        ctx.fillText('BLACK BOSS', VIEW_W/2, barY - 6);
+                    }
+                    // Left-side UI
+                    ctx.font = '18px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+                    ctx.fillText('SCORE: ' + score, 20, 60);
+                    ctx.fillText('KILLS: ' + killCount + ' / 25', 20, 85);
+                    ctx.fillText('TIME FLOW: ' + (timeScale*100).toFixed(0) + '%', 20, 110);
+                    ctx.fillStyle = '#90EE90';
+                    ctx.fillText('$ ' + cash, 20, 135);
+
+                    if (bossActive && !deathAnimation) {
+                        ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 22px "Courier New"'; ctx.textAlign = 'center';
+                        ctx.fillText('⚠ BOSS ⚠', VIEW_W/2, 60);
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(mouseCanvasX-12, mouseCanvasY); ctx.lineTo(mouseCanvasX+12, mouseCanvasY);
+                    ctx.moveTo(mouseCanvasX, mouseCanvasY-12); ctx.lineTo(mouseCanvasX, mouseCanvasY+12);
+                    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+                    if (gameState === 'gameover') {
+                        ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+                        ctx.fillStyle = '#ff4455'; ctx.font = 'bold 48px "Courier New"'; ctx.textAlign = 'center';
+                        ctx.fillText('TIME\'S UP', VIEW_W/2, VIEW_H/2-30);
+                        ctx.fillStyle = '#fff'; ctx.font = '22px "Courier New"';
+                        ctx.fillText('SCORE: ' + score, VIEW_W/2, VIEW_H/2+20);
+                        ctx.fillText('PRESS [R] TO RESTART', VIEW_W/2, VIEW_H/2+60);
                     }
                 }
-                if (bossActive && boss && boss.type === 'black') {
-                    const barWidth = 300, barHeight = 20;
-                    const barX = VIEW_W/2 - barWidth/2, barY = 20;
-                    const fillPercent = boss.hp / boss.maxHp;
-                    ctx.fillStyle = '#222';
-                    ctx.fillRect(barX, barY, barWidth, barHeight);
-                    ctx.fillStyle = '#cc2222';
-                    ctx.fillRect(barX, barY, barWidth * fillPercent, barHeight);
-                    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-                    ctx.strokeRect(barX, barY, barWidth, barHeight);
-                    ctx.fillStyle = '#fff'; ctx.font = '14px "Courier New"'; ctx.textAlign = 'center';
-                    ctx.fillText('BLACK BOSS', VIEW_W/2, barY - 6);
-                }
-                ctx.font = '18px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
-                ctx.fillText('SCORE: ' + score, 20, 60);
-                ctx.fillText('KILLS: ' + killCount + ' / 25', 20, 85);
-                ctx.fillText('TIME FLOW: ' + (timeScale*100).toFixed(0) + '%', 20, 110);
-                if (bossActive) {
-                    ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 22px "Courier New"'; ctx.textAlign = 'center';
-                    ctx.fillText('⚠ BOSS ⚠', VIEW_W/2, 60);
-                }
-                ctx.beginPath();
-                ctx.moveTo(mouseCanvasX-12, mouseCanvasY); ctx.lineTo(mouseCanvasX+12, mouseCanvasY);
-                ctx.moveTo(mouseCanvasX, mouseCanvasY-12); ctx.lineTo(mouseCanvasX, mouseCanvasY+12);
-                ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-                if (gameState === 'gameover') {
-                    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VIEW_W,VIEW_H);
-                    ctx.fillStyle = '#ff4455'; ctx.font = 'bold 48px "Courier New"'; ctx.textAlign = 'center';
-                    ctx.fillText('TIME\'S UP', VIEW_W/2, VIEW_H/2-30);
-                    ctx.fillStyle = '#fff'; ctx.font = '22px "Courier New"';
-                    ctx.fillText('SCORE: ' + score, VIEW_W/2, VIEW_H/2+20);
-                    ctx.fillText('PRESS [R] TO RESTART', VIEW_W/2, VIEW_H/2+60);
-                }
+
+                // Draw debug panel on top of everything if active
+                drawDebugPanel();
             }
 
             function gameLoop(now) {
@@ -1250,6 +1482,60 @@
             }
 
             window.addEventListener('keydown', (e) => {
+                // Debug input handling (when a debug field is focused)
+                if (debugMode && debugFocus !== null) {
+                    if (e.key === 'Backspace') {
+                        debugInputs[debugFocus] = debugInputs[debugFocus].slice(0, -1);
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'Enter') {
+                        applyDebugValues();
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'Escape') {
+                        debugFocus = null;
+                        e.preventDefault();
+                        return;
+                    }
+                    if (/^[0-9]$/.test(e.key)) {
+                        debugInputs[debugFocus] += e.key;
+                        e.preventDefault();
+                        return;
+                    }
+                    e.preventDefault();
+                    return;
+                }
+
+                // Secret debug code input on menu (before debug mode)
+                if (gameState === 'menu' && !debugMode) {
+                    if (e.key === 'Backspace') {
+                        debugCodeString = debugCodeString.slice(0, -1);
+                        e.preventDefault();
+                        return;
+                    }
+                    if (e.key === 'Enter') {
+                        if (debugCodeString === '676767') {
+                            debugMode = true;
+                            debugInputs.kills = killCount.toString();
+                            debugInputs.cash = cash.toString();
+                            debugInputs.score = score.toString();
+                            debugCodeString = '';
+                        } else {
+                            debugCodeString = '';
+                        }
+                        e.preventDefault();
+                        return;
+                    }
+                    if (/^[0-9]$/.test(e.key)) {
+                        debugCodeString += e.key;
+                        e.preventDefault();
+                        return;
+                    }
+                }
+
+                // Normal game controls
                 const rawKey = e.key;
                 const k = rawKey.toLowerCase();
                 if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
@@ -1257,7 +1543,7 @@
                 } else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') {
                     keys[rawKey] = true; e.preventDefault();
                 }
-                if (rawKey === 'Shift' && slowEnergy > 0) {
+                if (rawKey === 'Shift' && slowEnergy > 0 && !controlsFrozen && debugFocus === null) {
                     const wasSlow = slowMode;
                     slowMode = !slowMode;
                     if (!wasSlow && slowMode) {
@@ -1289,10 +1575,30 @@
             });
             canvas.addEventListener('mousedown', (e) => {
                 if (e.button === 0) {
-                    mouseDown = true;
+                    const mx = mouseCanvasX, my = mouseCanvasY;
+
+                    // Debug panel interactions (priority)
+                    if (debugMode && isInsideDebugPanel(mx, my)) {
+                        const field = getDebugFieldAt(mx, my);
+                        if (field === 'set') {
+                            applyDebugValues();
+                        } else if (field) {
+                            debugFocus = field;
+                            // Initialize field with current game values if empty
+                            if (debugInputs[field] === '') {
+                                if (field === 'kills') debugInputs.kills = killCount.toString();
+                                else if (field === 'cash') debugInputs.cash = cash.toString();
+                                else if (field === 'score') debugInputs.score = score.toString();
+                            }
+                        }
+                        return; // Don't start game or shoot
+                    } else {
+                        // Click outside panel unfocuses
+                        debugFocus = null;
+                    }
+
+                    if (!controlsFrozen && debugFocus === null) mouseDown = true;
                     if (gameState === 'menu') {
-                        const rect = canvas.getBoundingClientRect();
-                        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
                         const btnW = 200, btnH = 50, startY = 300, gap = 30;
                         const buttons = [{y:startY,diff:'easy'},{y:startY+btnH+gap,diff:'medium'},{y:startY+(btnH+gap)*2,diff:'hard'}];
                         for (const btn of buttons) {

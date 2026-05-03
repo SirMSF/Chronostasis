@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHRONOSTASIS</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #ccc;
+        }
+        #gameCanvas {
+            border: 2px solid #2a2a4a;
+            background: #111;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="900" height="600"></canvas>
+    <script>
+        (function() {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // ---------- Music Playlist ----------
+            const playlist = [];
+            for (let i = 1; i <= 10; i++) {
+                const filename = i === 1 ? 'music.mp3' : `music${i}.mp3`;
+                playlist.push(filename);
+            }
+            let currentTrackIndex = 0;
+            let bgMusic = null;
+            function playNextTrack() {
+                if (bgMusic) {
+                    bgMusic.pause();
+                    bgMusic.removeAttribute('src');
+                    bgMusic.load();
+                }
+                if (currentTrackIndex >= playlist.length) currentTrackIndex = 0;
+                const track = playlist[currentTrackIndex];
+                bgMusic = new Audio(track);
+                bgMusic.volume = 0.5;
+                bgMusic.loop = false;
+                bgMusic.addEventListener('ended', () => {
+                    currentTrackIndex++;
+                    playNextTrack();
+                });
+                bgMusic.addEventListener('error', () => {
+                    currentTrackIndex++;
+                    playNextTrack();
+                });
+                bgMusic.play().catch(() => {});
+            }
+
+            // ---------- World & View ----------
+            const WORLD_WIDTH = 3000;
+            const WORLD_HEIGHT = 2000;
+            const VIEW_W = canvas.width;
+            const VIEW_H = canvas.height;
+
+            // ---------- Player ----------
+            const PLAYER_RADIUS = 18;
+            const PLAYER_MAX_SPEED = 200;
+            const PLAYER_ACCEL = 1000;
+            const PLAYER_FRICTION = 500;
+            const PLAYER_SHOOT_COOLDOWN = 0.4;
+            const PLAYER_SPREAD = 0.04;
+            let PLAYER_BULLET_SPEED = 650;
+
+            const BULLET_RADIUS = 5;
+            const ENEMY_BULLET_SPEED = 280;
+
+            const ENEMY_RADIUS = 16;
+            let ENEMY_SPEED = 110;
+            const ENEMY_SHOOT_COOLDOWN = 2.0;
+            const ENEMY_SPREAD = 0.1;
+            const MAX_ENEMIES = 15;
+            const SPAWN_INTERVAL = 2.0;
+
+            const GREEN_SHOTGUN_COUNT = 3;
+            const GREEN_SHOTGUN_SPREAD = 0.4;
+            const BLUE_RAPID_COUNT = 3;
+            const BLUE_RAPID_DELAY = 0.12;
+            const BLUE_RAPID_SPREAD = 0.05;
+
+            const DODGE_DISTANCE = 45;
+            const DODGE_DURATION = 0.06;
+            const DODGE_MARGIN = 4;
+
+            const BOSS_MIN_DIST = 200;
+            const BOSS_MAX_DIST = 400;
+
+            const WBOSS_NORMAL_COOLDOWN = 0.9;
+            const WBOSS_FAST_COOLDOWN = 0.45;
+            const WBOSS_RAPID_FIRE_COUNT = 5;
+            const WBOSS_RAPID_FIRE_DELAY = 0.08;
+            const WBOSS_RAPID_SPREAD = 0.04;
+            const WBOSS_SHOTGUN_COUNT = 4;
+            const WBOSS_SHOTGUN_SPREAD = 0.4;
+
+            const BBLACK_HP = 25;
+            const BBLACK_SIZE = ENEMY_RADIUS * 1.6;
+            const BBLACK_MISSILE_COOLDOWN = 2.5;
+            const BBLACK_MISSILE_TURN_RATE = 3.0;
+            const BBLACK_MISSILE_LIFESPAN = 3.0;
+            const BBLACK_MISSILE_START_SPEED = ENEMY_BULLET_SPEED * 0.5;
+            const BBLACK_MISSILE_END_SPEED = ENEMY_BULLET_SPEED * 0.9;
+            const BBLACK_MISSILE_ACCEL_TIME = 2.5;
+            const BBLACK_MISSILE_RADIUS = 8;
+
+            // Shift ability energy
+            const SLOW_MAX_ENERGY = 7.0;
+            const SLOW_RECHARGE_RATE = 0.5;
+            const SLOW_RECHARGE_DELAY = 1.0;
+
+            // ---------- Grid & Walls ----------
+            const CELL_SIZE = 60;
+            const walls = [
+                { x: 400, y: 400, w: 500, h: 40 },
+                { x: 400, y: 600, w: 40, h: 300 },
+                { x: 800, y: 400, w: 200, h: 200 },
+                { x: 1400, y: 200, w: 40, h: 400 },
+                { x: 1600, y: 500, w: 300, h: 40 },
+                { x: 1800, y: 600, w: 40, h: 300 },
+                { x: 2200, y: 400, w: 300, h: 40 },
+                { x: 2400, y: 100, w: 40, h: 300 },
+                { x: 400, y: 1200, w: 600, h: 40 },
+                { x: 800, y: 1100, w: 40, h: 200 },
+                { x: 1200, y: 1000, w: 300, h: 40 },
+                { x: 1400, y: 1200, w: 40, h: 300 },
+                { x: 1800, y: 1400, w: 500, h: 40 },
+                { x: 2200, y: 1600, w: 40, h: 200 },
+                { x: 2400, y: 1400, w: 300, h: 300 },
+                { x: 600, y: 800, w: 40, h: 200 },
+                { x: 700, y: 800, w: 200, h: 40 },
+                { x: 1000, y: 800, w: 40, h: 150 },
+                { x: 1000, y: 950, w: 200, h: 40 },
+                { x: 1600, y: 1000, w: 40, h: 200 },
+                { x: 1700, y: 1000, w: 100, h: 40 },
+                { x: 1900, y: 900, w: 300, h: 40 },
+                { x: 1900, y: 900, w: 40, h: 200 },
+                { x: 2400, y: 600, w: 200, h: 40 },
+                { x: 2400, y: 600, w: 40, h: 200 },
+                { x: 500, y: 1500, w: 300, h: 40 },
+                { x: 500, y: 1500, w: 40, h: 200 },
+                { x: 760, y: 1500, w: 40, h: 200 },
+                { x: 500, y: 1700, w: 300, h: 40 }
+            ];
+
+            // ---------- Game State ----------
+            let gameState = 'menu';
+            let difficulty = 'medium';
+            let score = 0;
+            let killCount = 0;
+            let nextDarkRedScore = 1500;
+            let bossActive = false;
+            let boss = null;
+            let bossType = 'black';
+            let slowMode = false;
+            let slowEnergy = SLOW_MAX_ENERGY;
+            let rechargeDelay = 0;
+            let bossEverDefeated = false;
+
+            let player = {
+                x: WORLD_WIDTH / 2,
+                y: WORLD_HEIGHT / 2,
+                vx: 0, vy: 0,
+                radius: PLAYER_RADIUS,
+                shootTimer: 0
+            };
+
+            let enemies = [];
+            let bullets = [];
+            let missiles = [];
+            let spawnTimer = 0;
+            let timeScale = 1.0;
+
+            let cameraX = player.x - VIEW_W/2;
+            let cameraY = player.y - VIEW_H/2;
+
+            const keys = {
+                w: false, a: false, s: false, d: false,
+                ArrowUp: false, ArrowLeft: false, ArrowDown: false, ArrowRight: false
+            };
+            let mouseCanvasX = VIEW_W/2, mouseCanvasY = VIEW_H/2;
+            let mouseWorldX = player.x, mouseWorldY = player.y;
+            let mouseDown = false;
+            let lastRealTime = performance.now();
+
+            // ---------- Audio ----------
+            let audioCtx = null;
+            function initAudio() {
+                if (audioCtx) return;
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                if (!bgMusic || bgMusic.paused) playNextTrack();
+            }
+            function playPlayerShoot() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(880, now); osc.frequency.exponentialRampToValueAtTime(440, now+0.08);
+                gain.gain.setValueAtTime(0.08, now); gain.gain.exponentialRampToValueAtTime(0.001, now+0.15);
+                osc.connect(gain).connect(audioCtx.destination); osc.start(now); osc.stop(now+0.15);
+            }
+            function playEnemyHit() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(80, now+0.06);
+                gain.gain.setValueAtTime(0.1, now); gain.gain.exponentialRampToValueAtTime(0.001, now+0.1);
+                osc.connect(gain).connect(audioCtx.destination); osc.start(now); osc.stop(now+0.1);
+            }
+            function playEnemyKill() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                osc.type = 'sine'; osc.frequency.setValueAtTime(120, now); osc.frequency.exponentialRampToValueAtTime(40, now+0.35);
+                gain.gain.setValueAtTime(0.15, now); gain.gain.exponentialRampToValueAtTime(0.001, now+0.4);
+                osc.connect(gain).connect(audioCtx.destination); osc.start(now); osc.stop(now+0.4);
+                const osc2 = audioCtx.createOscillator(), gain2 = audioCtx.createGain();
+                osc2.type = 'sine'; osc2.frequency.setValueAtTime(180, now); osc2.frequency.exponentialRampToValueAtTime(60, now+0.35);
+                gain2.gain.setValueAtTime(0.06, now); gain2.gain.exponentialRampToValueAtTime(0.001, now+0.4);
+                osc2.connect(gain2).connect(audioCtx.destination); osc2.start(now); osc2.stop(now+0.4);
+            }
+            function playPlayerDeath() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                [600,400,200].forEach((freq,i) => {
+                    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                    osc.type = 'sine'; osc.frequency.setValueAtTime(freq, now+i*0.08);
+                    osc.frequency.exponentialRampToValueAtTime(freq*0.3, now+i*0.08+0.7);
+                    gain.gain.setValueAtTime(0.12, now+i*0.08); gain.gain.exponentialRampToValueAtTime(0.001, now+i*0.08+0.8);
+                    osc.connect(gain).connect(audioCtx.destination); osc.start(now+i*0.08); osc.stop(now+i*0.08+0.8);
+                });
+            }
+            function playBossSpawn() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                for (let i=0;i<3;i++) {
+                    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                    osc.type = 'sine'; osc.frequency.setValueAtTime(150+i*80, now+i*0.15);
+                    osc.frequency.exponentialRampToValueAtTime(60, now+i*0.15+0.5);
+                    gain.gain.setValueAtTime(0.15, now+i*0.15); gain.gain.exponentialRampToValueAtTime(0.001, now+i*0.15+0.6);
+                    osc.connect(gain).connect(audioCtx.destination); osc.start(now+i*0.15); osc.stop(now+i*0.15+0.6);
+                }
+            }
+            let ambientOsc = null, ambientGain = null;
+            function startAmbient() {
+                if (!audioCtx || ambientOsc) return;
+                ambientOsc = audioCtx.createOscillator(); ambientGain = audioCtx.createGain();
+                ambientOsc.type = 'sine'; ambientOsc.frequency.value = 45; ambientGain.gain.value = 0.02;
+                ambientOsc.connect(ambientGain).connect(audioCtx.destination); ambientOsc.start();
+            }
+            function updateAmbient(speedRatio) {
+                if (!ambientOsc) return;
+                const freq = 28 + speedRatio * 35; ambientOsc.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.15);
+                const gain = 0.01 + (1 - speedRatio) * 0.04; ambientGain.gain.setTargetAtTime(gain, audioCtx.currentTime, 0.15);
+            }
+
+            // ---------- Helpers ----------
+            function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+            function dist(a, b) { const dx=a.x-b.x, dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+            function circleRectCollision(cx, cy, rad, rx, ry, rw, rh) {
+                const closestX = clamp(cx, rx, rx+rw), closestY = clamp(cy, ry, ry+rh);
+                return (cx-closestX)**2 + (cy-closestY)**2 < rad*rad;
+            }
+            function lineIntersectsRect(x1, y1, x2, y2, rx, ry, rw, rh) {
+                function pointInRect(px, py) { return px >= rx && px <= rx+rw && py >= ry && py <= ry+rh; }
+                if (pointInRect(x1, y1) || pointInRect(x2, y2)) return true;
+                const edges = [[rx, ry, rx+rw, ry], [rx+rw, ry, rx+rw, ry+rh], [rx+rw, ry+rh, rx, ry+rh], [rx, ry+rh, rx, ry]];
+                for (const [ex1, ey1, ex2, ey2] of edges) {
+                    const d = (x2-x1)*(ey2-ey1) - (y2-y1)*(ex2-ex1);
+                    if (d === 0) continue;
+                    const t = ((ex1-x1)*(ey2-ey1) - (ey1-y1)*(ex2-ex1)) / d;
+                    const u = ((ex1-x1)*(y2-y1) - (ey1-y1)*(x2-x1)) / d;
+                    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return true;
+                }
+                return false;
+            }
+            function hasLineOfSight(x1, y1, x2, y2) {
+                for (const w of walls) if (lineIntersectsRect(x1, y1, x2, y2, w.x, w.y, w.w, w.h)) return false;
+                return true;
+            }
+            function pointInWall(x,y) {
+                for (const w of walls) if (x>=w.x&&x<=w.x+w.w&&y>=w.y&&y<=w.y+w.h) return true;
+                return false;
+            }
+            function manhattan(r1,c1,r2,c2){return Math.abs(r1-r2)+Math.abs(c1-c2);}
+            function findPath(sx,sy,ex,ey) {
+                const CELL = CELL_SIZE;
+                const COLS = Math.ceil(WORLD_WIDTH / CELL), ROWS = Math.ceil(WORLD_HEIGHT / CELL);
+                let blocked = Array(ROWS).fill().map(()=>Array(COLS).fill(false));
+                for (const w of walls) {
+                    const l=Math.floor(w.x/CELL), r=Math.floor((w.x+w.w)/CELL);
+                    const t=Math.floor(w.y/CELL), b=Math.floor((w.y+w.h)/CELL);
+                    for (let row=t; row<=b; row++) for (let col=l; col<=r; col++)
+                        if (row>=0&&row<ROWS&&col>=0&&col<COLS) blocked[row][col]=true;
+                }
+                const sc=Math.floor(sx/CELL), sr=Math.floor(sy/CELL);
+                const ec=Math.floor(ex/CELL), er=Math.floor(ey/CELL);
+                if (blocked[sr]?.[sc] || blocked[er]?.[ec]) return null;
+                const key=(r,c)=>r*COLS+c;
+                const startKey=key(sr,sc), endKey=key(er,ec);
+                const openSet=new Set([startKey]), gScore=new Map([[startKey,0]]), fScore=new Map([[startKey,manhattan(sr,sc,er,ec)]]), cameFrom=new Map();
+                const neighbors=[[-1,0],[1,0],[0,-1],[0,1]];
+                while (openSet.size) {
+                    let cur=null, low=Infinity;
+                    for (const k of openSet) { const f=fScore.get(k)||Infinity; if (f<low){low=f; cur=k;} }
+                    if (cur===endKey) {
+                        const path=[];
+                        let c=cur;
+                        while (c!==startKey) {
+                            const [r,c2]=[Math.floor(c/COLS),c%COLS];
+                            path.unshift({x:c2*CELL+CELL/2, y:r*CELL+CELL/2});
+                            c=cameFrom.get(c);
+                        }
+                        return path;
+                    }
+                    openSet.delete(cur);
+                    const [cr,cc]=[Math.floor(cur/COLS),cur%COLS];
+                    for (const [dr,dc] of neighbors) {
+                        const nr=cr+dr, nc=cc+dc;
+                        if (nr<0||nr>=ROWS||nc<0||nc>=COLS||blocked[nr][nc]) continue;
+                        const nkey=key(nr,nc), tg=(gScore.get(cur)||0)+1;
+                        if (tg<(gScore.get(nkey)||Infinity)) {
+                            cameFrom.set(nkey,cur); gScore.set(nkey,tg); fScore.set(nkey,tg+manhattan(nr,nc,er,ec));
+                            openSet.add(nkey);
+                        }
+                    }
+                }
+                return null;
+            }
+
+            // ---------- Difficulty setup ----------
+            function applyDifficulty() {
+                if (difficulty === 'easy') { PLAYER_BULLET_SPEED = 750; ENEMY_SPEED = 90; }
+                else if (difficulty === 'hard') { PLAYER_BULLET_SPEED = 650; ENEMY_SPEED = 135; }
+                else { PLAYER_BULLET_SPEED = 550; ENEMY_SPEED = 110; }
+            }
+
+            // ---------- Spawn helpers ----------
+            function getHPDistribution() {
+                if (difficulty === 'easy') return [1,1,1,2,2,3];
+                if (difficulty === 'hard') return [1,2,2,3,3,3];
+                return [1,1,2,2,3];
+            }
+
+            function spawnSpecialEnemy(type) {
+                const margin=40; let x,y, attempts=0;
+                do {
+                    const side=Math.floor(Math.random()*4);
+                    switch(side) {
+                        case 0: x=Math.random()*WORLD_WIDTH; y=margin; break;
+                        case 1: x=Math.random()*WORLD_WIDTH; y=WORLD_HEIGHT-margin; break;
+                        case 2: x=margin; y=Math.random()*WORLD_HEIGHT; break;
+                        case 3: x=WORLD_WIDTH-margin; y=Math.random()*WORLD_HEIGHT; break;
+                    }
+                } while (pointInWall(x,y) && attempts++<100);
+                return {
+                    x, y, radius: ENEMY_RADIUS, speed: ENEMY_SPEED, hp: 2, maxHp: 2,
+                    shootCooldown: ENEMY_SHOOT_COOLDOWN * 1.3,
+                    shootTimer: Math.random() * ENEMY_SHOOT_COOLDOWN,
+                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: false,
+                    specialType: type, burstCount: 0, burstTimer: 0, burstActive: false
+                };
+            }
+
+            function spawnEnemy() {
+                if (enemies.length >= MAX_ENEMIES || bossActive) return;
+                if (bossEverDefeated) {
+                    let specialChance = 0;
+                    if (difficulty === 'easy') specialChance = 0.15;
+                    else if (difficulty === 'hard') specialChance = 0.40;
+                    else specialChance = 0.25;
+                    if (Math.random() < specialChance) {
+                        const type = Math.random() < 0.5 ? 'green' : 'blue';
+                        enemies.push(spawnSpecialEnemy(type));
+                        return;
+                    }
+                }
+                const margin=40; let x,y, attempts=0;
+                do {
+                    const side=Math.floor(Math.random()*4);
+                    switch(side) {
+                        case 0: x=Math.random()*WORLD_WIDTH; y=margin; break;
+                        case 1: x=Math.random()*WORLD_WIDTH; y=WORLD_HEIGHT-margin; break;
+                        case 2: x=margin; y=Math.random()*WORLD_HEIGHT; break;
+                        case 3: x=WORLD_WIDTH-margin; y=Math.random()*WORLD_HEIGHT; break;
+                    }
+                } while (pointInWall(x,y) && attempts++<100);
+                const distro = getHPDistribution();
+                const hp = distro[Math.floor(Math.random() * distro.length)];
+                enemies.push({
+                    x, y, radius: ENEMY_RADIUS, speed: ENEMY_SPEED, hp, maxHp: hp,
+                    shootCooldown: ENEMY_SHOOT_COOLDOWN,
+                    shootTimer: Math.random()*ENEMY_SHOOT_COOLDOWN,
+                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: false, specialType: null
+                });
+            }
+
+            function spawnDarkRed() {
+                if (bossActive) return;
+                const margin=40; let x,y, attempts=0;
+                do {
+                    const side=Math.floor(Math.random()*4);
+                    switch(side) {
+                        case 0: x=Math.random()*WORLD_WIDTH; y=margin; break;
+                        case 1: x=Math.random()*WORLD_WIDTH; y=WORLD_HEIGHT-margin; break;
+                        case 2: x=margin; y=Math.random()*WORLD_HEIGHT; break;
+                        case 3: x=WORLD_WIDTH-margin; y=Math.random()*WORLD_HEIGHT; break;
+                    }
+                } while (pointInWall(x,y) && attempts++<100);
+                enemies.push({
+                    x, y, radius: ENEMY_RADIUS*1.2, speed: ENEMY_SPEED*0.9, hp:4, maxHp:4,
+                    shootCooldown: ENEMY_SHOOT_COOLDOWN,
+                    shootTimer: Math.random()*ENEMY_SHOOT_COOLDOWN,
+                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: true, specialType: null
+                });
+                if (audioCtx) {
+                    const now=audioCtx.currentTime;
+                    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+                    o.type='sine'; o.frequency.setValueAtTime(130,now); o.frequency.exponentialRampToValueAtTime(45,now+0.25);
+                    g.gain.setValueAtTime(0.12,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.35);
+                    o.connect(g).connect(audioCtx.destination); o.start(now); o.stop(now+0.35);
+                }
+            }
+
+            function spawnBlackBoss() {
+                enemies = []; bullets = []; missiles = [];
+                bossActive = true;
+                const margin=60; let x,y, attempts=0;
+                do {
+                    const side=Math.floor(Math.random()*4);
+                    switch(side) {
+                        case 0: x=Math.random()*WORLD_WIDTH; y=margin; break;
+                        case 1: x=Math.random()*WORLD_WIDTH; y=WORLD_HEIGHT-margin; break;
+                        case 2: x=margin; y=Math.random()*WORLD_HEIGHT; break;
+                        case 3: x=WORLD_WIDTH-margin; y=Math.random()*WORLD_HEIGHT; break;
+                    }
+                } while (pointInWall(x,y) && attempts++<100);
+                boss = {
+                    x, y, radius: BBLACK_SIZE, speed: ENEMY_SPEED * 1.0,
+                    hp: BBLACK_HP, maxHp: BBLACK_HP, type: 'black',
+                    missileTimer: BBLACK_MISSILE_COOLDOWN * 0.5, orbitDir: 1
+                };
+                playBossSpawn();
+            }
+
+            function spawnWhiteBoss() {
+                enemies = []; bullets = []; missiles = [];
+                bossActive = true;
+                const margin=50; let x,y, attempts=0;
+                do {
+                    const side=Math.floor(Math.random()*4);
+                    switch(side) {
+                        case 0: x=Math.random()*WORLD_WIDTH; y=margin; break;
+                        case 1: x=Math.random()*WORLD_WIDTH; y=WORLD_HEIGHT-margin; break;
+                        case 2: x=margin; y=Math.random()*WORLD_HEIGHT; break;
+                        case 3: x=WORLD_WIDTH-margin; y=Math.random()*WORLD_HEIGHT; break;
+                    }
+                } while (pointInWall(x,y) && attempts++<100);
+                boss = {
+                    x, y, radius: ENEMY_RADIUS * 0.85, speed: ENEMY_SPEED * 1.2,
+                    hp: 1, maxHp: 1, type: 'white',
+                    shootTimer: WBOSS_NORMAL_COOLDOWN,
+                    isDashing: false, dashProgress: 0,
+                    dashStartPos: {x:0, y:0}, dashTargetPos: {x:0, y:0},
+                    shotCount: 0, specialType: 0, specialActive: false,
+                    specialStep: 0, specialTimer: 0, orbitDir: 1
+                };
+                playBossSpawn();
+            }
+
+            function restartGame() {
+                player.x = WORLD_WIDTH/2; player.y = WORLD_HEIGHT/2;
+                player.vx=0; player.vy=0; player.shootTimer=0;
+                bullets=[]; missiles=[]; enemies=[]; score=0; killCount=0;
+                nextDarkRedScore=1500;
+                bossActive=false; boss=null; bossEverDefeated = false;
+                bossType = 'black';
+                spawnTimer=0; slowMode = false;
+                slowEnergy = SLOW_MAX_ENERGY; rechargeDelay = 0;
+                applyDifficulty();
+                gameState='playing';
+                for (let i=0;i<5;i++) spawnEnemy();
+            }
+
+            // ---------- Update ----------
+            function update(realDeltaSec) {
+                if (gameState !== 'playing') return;
+
+                // --- Shift energy system ---
+                if (slowMode) {
+                    slowEnergy = Math.max(0, slowEnergy - realDeltaSec);
+                    rechargeDelay = 0;
+                    if (slowEnergy <= 0) slowMode = false;
+                } else {
+                    if (slowEnergy < SLOW_MAX_ENERGY) {
+                        if (rechargeDelay > 0) {
+                            rechargeDelay = Math.max(0, rechargeDelay - realDeltaSec);
+                        } else {
+                            slowEnergy = Math.min(SLOW_MAX_ENERGY, slowEnergy + SLOW_RECHARGE_RATE * realDeltaSec);
+                        }
+                    }
+                }
+
+                let effectiveMaxSpeed = slowMode ? PLAYER_MAX_SPEED * 0.5 : PLAYER_MAX_SPEED;
+                let inputX=0,inputY=0;
+                if (keys.w || keys.ArrowUp) inputY -= 1;
+                if (keys.s || keys.ArrowDown) inputY += 1;
+                if (keys.a || keys.ArrowLeft) inputX -= 1;
+                if (keys.d || keys.ArrowRight) inputX += 1;
+                if (inputX||inputY) { const l=Math.sqrt(inputX*inputX+inputY*inputY); inputX/=l; inputY/=l; }
+
+                if (inputX||inputY) {
+                    player.vx+=inputX*PLAYER_ACCEL*realDeltaSec;
+                    player.vy+=inputY*PLAYER_ACCEL*realDeltaSec;
+                } else {
+                    const s=Math.sqrt(player.vx*player.vx+player.vy*player.vy);
+                    if (s>0) {
+                        const fric=PLAYER_FRICTION*realDeltaSec;
+                        if (fric>=s) { player.vx=0; player.vy=0; }
+                        else { const fac=(s-fric)/s; player.vx*=fac; player.vy*=fac; }
+                    }
+                }
+                let currentSpeed = Math.sqrt(player.vx*player.vx+player.vy*player.vy);
+                if (currentSpeed > effectiveMaxSpeed) {
+                    const scale = effectiveMaxSpeed / currentSpeed;
+                    player.vx *= scale; player.vy *= scale;
+                }
+                player.x+=player.vx*realDeltaSec; player.y+=player.vy*realDeltaSec;
+
+                for (const w of walls) {
+                    if (circleRectCollision(player.x,player.y,player.radius,w.x,w.y,w.w,w.h)) {
+                        const cx=clamp(player.x,w.x,w.x+w.w), cy=clamp(player.y,w.y,w.y+w.h);
+                        const dx=player.x-cx, dy=player.y-cy, d=Math.sqrt(dx*dx+dy*dy)||1;
+                        player.x+=(dx/d)*(player.radius-d); player.y+=(dy/d)*(player.radius-d);
+                        player.vx*=0.3; player.vy*=0.3;
+                    }
+                }
+                const bnd=player.radius;
+                if (player.x<bnd){player.x=bnd;player.vx=0;} if (player.x>WORLD_WIDTH-bnd){player.x=WORLD_WIDTH-bnd;player.vx=0;}
+                if (player.y<bnd){player.y=bnd;player.vy=0;} if (player.y>WORLD_HEIGHT-bnd){player.y=WORLD_HEIGHT-bnd;player.vy=0;}
+
+                currentSpeed = Math.sqrt(player.vx*player.vx+player.vy*player.vy);
+                const speedRatio = clamp(currentSpeed / PLAYER_MAX_SPEED, 0, 1);
+                timeScale = slowMode ? 0.5 : (0.1 + 0.9 * speedRatio);
+                const gameDelta = realDeltaSec * timeScale;
+                updateAmbient(speedRatio);
+
+                if (bossActive && boss) {
+                    const bossDelta = realDeltaSec * timeScale;
+                    const b = boss;
+                    if (b.type === 'black' || (b.type === 'white' && !b.isDashing)) {
+                        const toPlayerX = player.x - b.x;
+                        const toPlayerY = player.y - b.y;
+                        const distToPlayer = Math.sqrt(toPlayerX*toPlayerX + toPlayerY*toPlayerY);
+                        let steerX = 0, steerY = 0;
+                        if (distToPlayer > 0) {
+                            const normX = toPlayerX / distToPlayer;
+                            const normY = toPlayerY / distToPlayer;
+                            if (distToPlayer < BOSS_MIN_DIST) {
+                                steerX -= normX * 2.0; steerY -= normY * 2.0;
+                            } else if (distToPlayer > BOSS_MAX_DIST) {
+                                steerX += normX * 1.5; steerY += normY * 1.5;
+                            } else {
+                                const perpX = -normY, perpY = normX;
+                                if (Math.random() < 0.01) b.orbitDir = (b.orbitDir || 1) * -1;
+                                const dir = b.orbitDir || 1;
+                                steerX += perpX * dir * 1.2; steerY += perpY * dir * 1.2;
+                            }
+                        }
+                        const wallAvoidDist = 80;
+                        for (const w of walls) {
+                            const closestX = clamp(b.x, w.x, w.x+w.w);
+                            const closestY = clamp(b.y, w.y, w.y+w.h);
+                            const dx = b.x - closestX, dy = b.y - closestY;
+                            const d = Math.sqrt(dx*dx + dy*dy);
+                            if (d < wallAvoidDist && d > 0) {
+                                const force = (wallAvoidDist - d) / wallAvoidDist * 2.5;
+                                steerX += (dx / d) * force; steerY += (dy / d) * force;
+                            }
+                        }
+                        const steerLen = Math.sqrt(steerX*steerX + steerY*steerY);
+                        if (steerLen > 0) { steerX /= steerLen; steerY /= steerLen; }
+                        b.x += steerX * b.speed * bossDelta;
+                        b.y += steerY * b.speed * bossDelta;
+                        for (const w of walls) {
+                            if (circleRectCollision(b.x, b.y, b.radius, w.x, w.y, w.w, w.h)) {
+                                const cx = clamp(b.x, w.x, w.x+w.w), cy = clamp(b.y, w.y, w.y+w.h);
+                                const dx = b.x - cx, dy = b.y - cy, d = Math.sqrt(dx*dx+dy*dy)||1;
+                                b.x += (dx/d)*(b.radius - d); b.y += (dy/d)*(b.radius - d);
+                            }
+                        }
+                        b.x = clamp(b.x, b.radius, WORLD_WIDTH - b.radius);
+                        b.y = clamp(b.y, b.radius, WORLD_HEIGHT - b.radius);
+                    }
+
+                    if (b.type === 'white') {
+                        const wb = b;
+                        if (wb.isDashing) {
+                            wb.dashProgress += bossDelta;
+                            const t = clamp(wb.dashProgress / DODGE_DURATION, 0, 1);
+                            wb.x = wb.dashStartPos.x + (wb.dashTargetPos.x - wb.dashStartPos.x) * t;
+                            wb.y = wb.dashStartPos.y + (wb.dashTargetPos.y - wb.dashStartPos.y) * t;
+                            for (const w of walls) {
+                                if (circleRectCollision(wb.x, wb.y, wb.radius, w.x, w.y, w.w, w.h)) {
+                                    const cx = clamp(wb.x, w.x, w.x+w.w), cy = clamp(wb.y, w.y, w.y+w.h);
+                                    const dx = wb.x - cx, dy = wb.y - cy, d = Math.sqrt(dx*dx+dy*dy)||1;
+                                    wb.x += (dx/d)*(wb.radius - d); wb.y += (dy/d)*(wb.radius - d);
+                                }
+                            }
+                            wb.x = clamp(wb.x, wb.radius, WORLD_WIDTH - wb.radius);
+                            wb.y = clamp(wb.y, wb.radius, WORLD_HEIGHT - wb.radius);
+                            if (t >= 1) wb.isDashing = false;
+                        } else {
+                            if (wb.specialActive) {
+                                if (wb.specialType === 0) {
+                                    wb.specialTimer -= bossDelta;
+                                    while (wb.specialTimer <= 0 && wb.specialStep < WBOSS_RAPID_FIRE_COUNT) {
+                                        if (hasLineOfSight(wb.x, wb.y, player.x, player.y)) {
+                                            const base = Math.atan2(player.y - wb.y, player.x - wb.x);
+                                            const spread = (Math.random() - 0.5) * 2 * WBOSS_RAPID_SPREAD;
+                                            bullets.push({
+                                                x: wb.x, y: wb.y,
+                                                vx: Math.cos(base + spread) * ENEMY_BULLET_SPEED * 1.0,
+                                                vy: Math.sin(base + spread) * ENEMY_BULLET_SPEED * 1.0,
+                                                radius: BULLET_RADIUS, owner: 'enemy'
+                                            });
+                                        }
+                                        wb.specialStep++;
+                                        wb.specialTimer += WBOSS_RAPID_FIRE_DELAY;
+                                    }
+                                    if (wb.specialStep >= WBOSS_RAPID_FIRE_COUNT) {
+                                        wb.specialActive = false;
+                                        wb.shotCount = 0;
+                                        wb.shootTimer = WBOSS_NORMAL_COOLDOWN;
+                                    }
+                                } else {
+                                    if (wb.specialStep === 0 && hasLineOfSight(wb.x, wb.y, player.x, player.y)) {
+                                        const base = Math.atan2(player.y - wb.y, player.x - wb.x);
+                                        const startAngle = base - WBOSS_SHOTGUN_SPREAD / 2;
+                                        for (let i = 0; i < WBOSS_SHOTGUN_COUNT; i++) {
+                                            const a = startAngle + (i / (WBOSS_SHOTGUN_COUNT - 1)) * WBOSS_SHOTGUN_SPREAD;
+                                            bullets.push({
+                                                x: wb.x, y: wb.y,
+                                                vx: Math.cos(a) * ENEMY_BULLET_SPEED * 0.8,
+                                                vy: Math.sin(a) * ENEMY_BULLET_SPEED * 0.8,
+                                                radius: BULLET_RADIUS, owner: 'enemy'
+                                            });
+                                        }
+                                        wb.specialStep = 1;
+                                        wb.specialActive = false;
+                                        wb.shotCount = 0;
+                                        wb.shootTimer = WBOSS_NORMAL_COOLDOWN;
+                                    }
+                                }
+                            } else {
+                                wb.shootTimer -= bossDelta;
+                                if (wb.shootTimer <= 0 && hasLineOfSight(wb.x, wb.y, player.x, player.y)) {
+                                    const shotIndex = wb.shotCount;
+                                    const isFourth = (shotIndex === 3);
+                                    const cooldown = isFourth ? WBOSS_FAST_COOLDOWN : WBOSS_NORMAL_COOLDOWN;
+                                    const base = Math.atan2(player.y - wb.y, player.x - wb.x);
+                                    const spread = (Math.random() - 0.5) * 0.08;
+                                    bullets.push({
+                                        x: wb.x, y: wb.y,
+                                        vx: Math.cos(base+spread) * ENEMY_BULLET_SPEED * 0.85,
+                                        vy: Math.sin(base+spread) * ENEMY_BULLET_SPEED * 0.85,
+                                        radius: BULLET_RADIUS, owner: 'enemy'
+                                    });
+                                    wb.shotCount++;
+                                    if (wb.shotCount >= 4) {
+                                        wb.specialActive = true;
+                                        wb.specialStep = 0;
+                                        wb.specialTimer = 0;
+                                        wb.specialType = (wb.specialType === 0) ? 1 : 0;
+                                        wb.shootTimer = 999;
+                                    } else {
+                                        wb.shootTimer = cooldown;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (b.type === 'black') {
+                        b.missileTimer -= bossDelta;
+                        if (b.missileTimer <= 0) {
+                            const baseAngle = Math.atan2(player.y - b.y, player.x - b.x);
+                            const perpAngle = baseAngle + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
+                            missiles.push({
+                                x: b.x, y: b.y,
+                                vx: Math.cos(perpAngle) * BBLACK_MISSILE_START_SPEED,
+                                vy: Math.sin(perpAngle) * BBLACK_MISSILE_START_SPEED,
+                                radius: BBLACK_MISSILE_RADIUS,
+                                life: BBLACK_MISSILE_LIFESPAN,
+                                age: 0,
+                                accelerating: true,
+                                startSpeed: BBLACK_MISSILE_START_SPEED,
+                                endSpeed: BBLACK_MISSILE_END_SPEED,
+                                accelTime: BBLACK_MISSILE_ACCEL_TIME,
+                                turnRate: BBLACK_MISSILE_TURN_RATE
+                            });
+                            b.missileTimer = BBLACK_MISSILE_COOLDOWN;
+                        }
+                    }
+                }
+
+                if (gameDelta > 0) {
+                    if (player.shootTimer > 0) player.shootTimer -= gameDelta;
+                    if (mouseDown && player.shootTimer <= 0) {
+                        const baseAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
+                        const spreadAngle = (Math.random() - 0.5) * 2 * PLAYER_SPREAD;
+                        bullets.push({
+                            x: player.x, y: player.y,
+                            vx: Math.cos(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
+                            vy: Math.sin(baseAngle+spreadAngle) * PLAYER_BULLET_SPEED,
+                            radius: BULLET_RADIUS, owner: 'player'
+                        });
+                        player.shootTimer = PLAYER_SHOOT_COOLDOWN;
+                        playPlayerShoot();
+                    }
+
+                    for (let i = bullets.length-1; i >= 0; i--) {
+                        const b = bullets[i];
+                        b.x += b.vx * gameDelta; b.y += b.vy * gameDelta;
+                        if (b.x < -50 || b.x > WORLD_WIDTH+50 || b.y < -50 || b.y > WORLD_HEIGHT+50) {
+                            bullets.splice(i,1); continue;
+                        }
+                        for (const w of walls) {
+                            if (circleRectCollision(b.x, b.y, b.radius, w.x, w.y, w.w, w.h)) {
+                                bullets.splice(i,1); break;
+                            }
+                        }
+                    }
+
+                    for (let i = missiles.length-1; i >= 0; i--) {
+                        const m = missiles[i];
+                        m.age += gameDelta;
+                        if (m.age >= m.life) { missiles.splice(i,1); continue; }
+                        if (m.accelerating) {
+                            const accelProgress = Math.min(m.age / m.accelTime, 1);
+                            const currentSpeed = m.startSpeed + (m.endSpeed - m.startSpeed) * accelProgress;
+                            const currentDir = Math.atan2(m.vy, m.vx);
+                            m.vx = Math.cos(currentDir) * currentSpeed;
+                            m.vy = Math.sin(currentDir) * currentSpeed;
+                            if (accelProgress >= 1) m.accelerating = false;
+                        }
+                        const desiredAngle = Math.atan2(player.y - m.y, player.x - m.x);
+                        let currentAngle = Math.atan2(m.vy, m.vx);
+                        let angleDiff = desiredAngle - currentAngle;
+                        while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
+                        while (angleDiff < -Math.PI) angleDiff += 2*Math.PI;
+                        const maxTurn = m.turnRate * gameDelta;
+                        if (Math.abs(angleDiff) > maxTurn) angleDiff = Math.sign(angleDiff) * maxTurn;
+                        const newAngle = currentAngle + angleDiff;
+                        const speed = Math.sqrt(m.vx*m.vx + m.vy*m.vy);
+                        m.vx = Math.cos(newAngle) * speed;
+                        m.vy = Math.sin(newAngle) * speed;
+                        m.x += m.vx * gameDelta;
+                        m.y += m.vy * gameDelta;
+                        if (m.x < -50 || m.x > WORLD_WIDTH+50 || m.y < -50 || m.y > WORLD_HEIGHT+50) {
+                            missiles.splice(i,1); continue;
+                        }
+                        for (const w of walls) {
+                            if (circleRectCollision(m.x, m.y, m.radius, w.x, w.y, w.w, w.h)) {
+                                missiles.splice(i,1); break;
+                            }
+                        }
+                    }
+
+                    for (let b = bullets.length-1; b >= 0; b--) {
+                        const bullet = bullets[b];
+                        if (bullet.owner !== 'player') continue;
+                        for (let i = missiles.length-1; i >= 0; i--) {
+                            if (circleRectCollision(bullet.x, bullet.y, bullet.radius,
+                                missiles[i].x - missiles[i].radius, missiles[i].y - missiles[i].radius,
+                                missiles[i].radius*2, missiles[i].radius*2)) {
+                                missiles.splice(i,1);
+                                bullets.splice(b,1);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!bossActive) {
+                        for (const enemy of enemies) {
+                            enemy.pathFrameCounter = (enemy.pathFrameCounter||0)+1;
+                            if (enemy.pathFrameCounter%30 === 0 || enemy.path.length === 0) {
+                                const p = findPath(enemy.x, enemy.y, player.x, player.y);
+                                if (p) { enemy.path = p; enemy.pathIndex = 0; }
+                            }
+                            let targetX = player.x, targetY = player.y;
+                            if (enemy.path.length > 0) {
+                                const wp = enemy.path[enemy.pathIndex];
+                                if (wp) {
+                                    targetX = wp.x; targetY = wp.y;
+                                    if (dist(enemy, wp) < enemy.radius * 2) {
+                                        enemy.pathIndex++; if (enemy.pathIndex >= enemy.path.length) enemy.path = [];
+                                    }
+                                }
+                            }
+                            const ang = Math.atan2(targetY - enemy.y, targetX - enemy.x);
+                            enemy.x += Math.cos(ang) * enemy.speed * gameDelta;
+                            enemy.y += Math.sin(ang) * enemy.speed * gameDelta;
+                            for (const w of walls) {
+                                if (circleRectCollision(enemy.x, enemy.y, enemy.radius, w.x, w.y, w.w, w.h)) {
+                                    const cx = clamp(enemy.x, w.x, w.x+w.w), cy = clamp(enemy.y, w.y, w.y+w.h);
+                                    const dx = enemy.x-cx, dy = enemy.y-cy, d = Math.sqrt(dx*dx+dy*dy)||1;
+                                    enemy.x += (dx/d)*(enemy.radius-d); enemy.y += (dy/d)*(enemy.radius-d);
+                                }
+                            }
+                            enemy.x = clamp(enemy.x, enemy.radius, WORLD_WIDTH-enemy.radius);
+                            enemy.y = clamp(enemy.y, enemy.radius, WORLD_HEIGHT-enemy.radius);
+
+                            if (enemy.specialType === 'green') {
+                                enemy.shootTimer -= gameDelta;
+                                if (enemy.shootTimer <= 0 && dist(enemy, player) < 700) {
+                                    if (hasLineOfSight(enemy.x, enemy.y, player.x, player.y)) {
+                                        const base = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                                        const startAngle = base - GREEN_SHOTGUN_SPREAD / 2;
+                                        for (let i = 0; i < GREEN_SHOTGUN_COUNT; i++) {
+                                            const a = startAngle + (i / (GREEN_SHOTGUN_COUNT - 1)) * GREEN_SHOTGUN_SPREAD;
+                                            bullets.push({
+                                                x: enemy.x, y: enemy.y,
+                                                vx: Math.cos(a) * ENEMY_BULLET_SPEED * 0.8,
+                                                vy: Math.sin(a) * ENEMY_BULLET_SPEED * 0.8,
+                                                radius: BULLET_RADIUS, owner: 'enemy'
+                                            });
+                                        }
+                                    }
+                                    enemy.shootTimer = enemy.shootCooldown;
+                                }
+                            } else if (enemy.specialType === 'blue') {
+                                enemy.shootTimer -= gameDelta;
+                                if (!enemy.burstActive) {
+                                    if (enemy.shootTimer <= 0 && dist(enemy, player) < 700) {
+                                        if (hasLineOfSight(enemy.x, enemy.y, player.x, player.y)) {
+                                            enemy.burstActive = true;
+                                            enemy.burstCount = BLUE_RAPID_COUNT;
+                                            enemy.burstTimer = 0;
+                                        }
+                                    }
+                                } else {
+                                    enemy.burstTimer -= gameDelta;
+                                    while (enemy.burstTimer <= 0 && enemy.burstCount > 0) {
+                                        if (hasLineOfSight(enemy.x, enemy.y, player.x, player.y)) {
+                                            const base = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                                            const spread = (Math.random() - 0.5) * 2 * BLUE_RAPID_SPREAD;
+                                            bullets.push({
+                                                x: enemy.x, y: enemy.y,
+                                                vx: Math.cos(base + spread) * ENEMY_BULLET_SPEED,
+                                                vy: Math.sin(base + spread) * ENEMY_BULLET_SPEED,
+                                                radius: BULLET_RADIUS, owner: 'enemy'
+                                            });
+                                        }
+                                        enemy.burstCount--;
+                                        enemy.burstTimer += BLUE_RAPID_DELAY;
+                                    }
+                                    if (enemy.burstCount <= 0) {
+                                        enemy.burstActive = false;
+                                        enemy.shootTimer = enemy.shootCooldown;
+                                    }
+                                }
+                            } else {
+                                enemy.shootTimer -= gameDelta;
+                                if (enemy.shootTimer <= 0 && dist(enemy, player) < 700) {
+                                    if (hasLineOfSight(enemy.x, enemy.y, player.x, player.y)) {
+                                        const base = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                                        const spread = (Math.random() - 0.5) * 2 * ENEMY_SPREAD;
+                                        bullets.push({
+                                            x: enemy.x, y: enemy.y,
+                                            vx: Math.cos(base+spread) * ENEMY_BULLET_SPEED,
+                                            vy: Math.sin(base+spread) * ENEMY_BULLET_SPEED,
+                                            radius: BULLET_RADIUS, owner: 'enemy'
+                                        });
+                                        enemy.shootTimer = enemy.shootCooldown;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (bossActive && boss) {
+                        const proximityThreshold = boss.radius + BULLET_RADIUS + (boss.type === 'white' ? DODGE_MARGIN : 0);
+                        for (let b = bullets.length-1; b >= 0; b--) {
+                            const bullet = bullets[b];
+                            if (bullet.owner !== 'player') continue;
+                            if (dist(bullet, boss) < proximityThreshold) {
+                                if (boss.type === 'white' && !boss.isDashing) {
+                                    if (Math.random() < 0.93) {
+                                        const perpX = -bullet.vy, perpY = bullet.vx;
+                                        const len = Math.sqrt(perpX*perpX+perpY*perpY) || 1;
+                                        let dirX = perpX / len, dirY = perpY / len;
+                                        if (Math.random() < 0.5) { dirX = -dirX; dirY = -dirY; }
+                                        boss.isDashing = true;
+                                        boss.dashProgress = 0;
+                                        boss.dashStartPos = {x: boss.x, y: boss.y};
+                                        boss.dashTargetPos = {
+                                            x: boss.x + dirX * DODGE_DISTANCE,
+                                            y: boss.y + dirY * DODGE_DISTANCE
+                                        };
+                                        boss.dashTargetPos.x = clamp(boss.dashTargetPos.x, boss.radius, WORLD_WIDTH - boss.radius);
+                                        boss.dashTargetPos.y = clamp(boss.dashTargetPos.y, boss.radius, WORLD_HEIGHT - boss.radius);
+                                        bullets.splice(b,1);
+                                        break;
+                                    }
+                                }
+                                if (boss.type === 'black' || (boss.type === 'white' && !boss.isDashing)) {
+                                    boss.hp--;
+                                    if (boss.hp <= 0) {
+                                        score += (boss.type === 'black' ? 1500 : 500);
+                                        bossActive = false; boss = null;
+                                        killCount = 0;
+                                        bossEverDefeated = true;
+                                        bossType = bossType === 'black' ? 'white' : 'black';
+                                        playEnemyKill();
+                                    } else {
+                                        playEnemyHit();
+                                    }
+                                    bullets.splice(b,1);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    const enemiesToRemove = [];
+                    const bulletsToRemove = new Set();
+                    for (let b = bullets.length-1; b >= 0; b--) {
+                        const bullet = bullets[b];
+                        if (bullet.owner !== 'player') continue;
+                        for (let e = enemies.length-1; e >= 0; e--) {
+                            const en = enemies[e];
+                            if (circleRectCollision(bullet.x, bullet.y, bullet.radius,
+                                en.x - en.radius, en.y - en.radius, en.radius*2, en.radius*2)) {
+                                en.hp--;
+                                if (en.hp <= 0) {
+                                    enemiesToRemove.push(e);
+                                } else {
+                                    playEnemyHit();
+                                }
+                                bulletsToRemove.add(b);
+                                break;
+                            }
+                        }
+                    }
+                    for (const idx of bulletsToRemove) {
+                        if (idx >= 0 && idx < bullets.length) bullets.splice(idx,1);
+                    }
+                    for (const eIdx of enemiesToRemove.sort((a,b)=>b-a)) {
+                        if (eIdx >= 0 && eIdx < enemies.length) {
+                            const deadEnemy = enemies[eIdx];
+                            score += 100 * deadEnemy.maxHp;
+                            killCount++;
+                            enemies.splice(eIdx, 1);
+                            playEnemyKill();
+                            if (!bossActive && score >= nextDarkRedScore) {
+                                nextDarkRedScore += 1500;
+                                spawnDarkRed();
+                            }
+                            if (!bossActive && killCount >= 25) {
+                                if (bossType === 'black') spawnBlackBoss();
+                                else spawnWhiteBoss();
+                            }
+                        }
+                    }
+
+                    for (let b = bullets.length-1; b >= 0; b--) {
+                        const bullet = bullets[b];
+                        if (bullet.owner !== 'enemy') continue;
+                        if (circleRectCollision(bullet.x, bullet.y, bullet.radius,
+                            player.x - player.radius, player.y - player.radius, player.radius*2, player.radius*2)) {
+                            gameState = 'gameover'; playPlayerDeath(); return;
+                        }
+                    }
+                    for (let i = missiles.length-1; i >= 0; i--) {
+                        const m = missiles[i];
+                        if (circleRectCollision(m.x, m.y, m.radius,
+                            player.x - player.radius, player.y - player.radius, player.radius*2, player.radius*2)) {
+                            gameState = 'gameover'; playPlayerDeath(); return;
+                        }
+                    }
+
+                    if (bossActive && boss && circleRectCollision(player.x, player.y, player.radius,
+                        boss.x - boss.radius, boss.y - boss.radius, boss.radius*2, boss.radius*2)) {
+                        gameState = 'gameover'; playPlayerDeath(); return;
+                    }
+                    for (const enemy of enemies) {
+                        if (circleRectCollision(player.x, player.y, player.radius,
+                            enemy.x - enemy.radius, enemy.y - enemy.radius, enemy.radius*2, enemy.radius*2)) {
+                            gameState = 'gameover'; playPlayerDeath(); return;
+                        }
+                    }
+
+                    if (!bossActive) {
+                        spawnTimer += gameDelta;
+                        if (spawnTimer >= SPAWN_INTERVAL) {
+                            spawnTimer -= SPAWN_INTERVAL;
+                            spawnEnemy();
+                        }
+                    }
+                }
+
+                const targetCamX = player.x - VIEW_W/2;
+                const targetCamY = player.y - VIEW_H/2;
+                const clampedCamX = clamp(targetCamX, 0, WORLD_WIDTH - VIEW_W);
+                const clampedCamY = clamp(targetCamY, 0, WORLD_HEIGHT - VIEW_H);
+                const lerp = 1 - Math.exp(-6 * realDeltaSec);
+                cameraX += (clampedCamX - cameraX) * lerp;
+                cameraY += (clampedCamY - cameraY) * lerp;
+                mouseWorldX = mouseCanvasX + cameraX;
+                mouseWorldY = mouseCanvasY + cameraY;
+            }
+
+            // ---------- Render ----------
+            function draw() {
+                ctx.clearRect(0,0,VIEW_W,VIEW_H);
+                if (gameState === 'menu') {
+                    // Background
+                    ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+
+                    // Developer credit at the top
+                    ctx.fillStyle = '#aaaaaa';
+                    ctx.font = '18px "Courier New"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Developed by Muhammad Shayan Faheem', VIEW_W/2, 40);
+
+                    // Title
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 48px "Courier New"';
+                    ctx.fillText('CHRONOSTASIS', VIEW_W/2, 150);
+
+                    // Select difficulty
+                    ctx.font = '24px "Courier New"';
+                    ctx.fillText('Select Difficulty', VIEW_W/2, 230);
+
+                    // Difficulty buttons
+                    const btnW = 200, btnH = 50, startY = 300, gap = 30;
+                    const buttons = [
+                        { text:'EASY', diff:'easy', y:startY },
+                        { text:'MODERATE', diff:'medium', y:startY+btnH+gap },
+                        { text:'HARD', diff:'hard', y:startY+(btnH+gap)*2 }
+                    ];
+                    for (const btn of buttons) {
+                        const x = VIEW_W/2 - btnW/2;
+                        ctx.fillStyle = '#2a2a4a'; ctx.fillRect(x, btn.y, btnW, btnH);
+                        ctx.strokeStyle = '#4a4a7a'; ctx.lineWidth = 3; ctx.strokeRect(x, btn.y, btnW, btnH);
+                        ctx.fillStyle = '#ffffff'; ctx.font = '20px "Courier New"';
+                        ctx.fillText(btn.text, VIEW_W/2, btn.y+btnH/2+7);
+                    }
+
+                    // Instruction
+                    ctx.fillStyle = '#aaa'; ctx.font = '16px "Courier New"';
+                    ctx.fillText('Click difficulty to start', VIEW_W/2, startY+(btnH+gap)*3+30);
+                    return;
+                }
+
+                // ... (rest of the game rendering unchanged)
+                const gridSize = CELL_SIZE;
+                ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
+                const startX = Math.floor(cameraX / gridSize) * gridSize;
+                const startY = Math.floor(cameraY / gridSize) * gridSize;
+                for (let wx = startX; wx < cameraX+VIEW_W+gridSize; wx += gridSize) {
+                    const sx = wx - cameraX; ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,VIEW_H); ctx.stroke();
+                }
+                for (let wy = startY; wy < cameraY+VIEW_H+gridSize; wy += gridSize) {
+                    const sy = wy - cameraY; ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(VIEW_W,sy); ctx.stroke();
+                }
+                ctx.fillStyle = '#2a2a4a'; ctx.strokeStyle = '#4a4a7a'; ctx.lineWidth = 2;
+                for (const w of walls) {
+                    const sx = w.x - cameraX, sy = w.y - cameraY;
+                    if (sx+w.w < 0 || sx > VIEW_W || sy+w.h < 0 || sy > VIEW_H) continue;
+                    ctx.fillRect(sx, sy, w.w, w.h); ctx.strokeRect(sx, sy, w.w, w.h);
+                }
+                for (const b of bullets) {
+                    const sx = b.x - cameraX, sy = b.y - cameraY;
+                    if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
+                    ctx.beginPath(); ctx.arc(sx,sy,b.radius,0,Math.PI*2);
+                    ctx.fillStyle = b.owner==='player'?'#ffdd44':'#ff3366'; ctx.fill();
+                }
+                for (const m of missiles) {
+                    const sx = m.x - cameraX, sy = m.y - cameraY;
+                    if (sx<-20||sx>VIEW_W+20||sy<-20||sy>VIEW_H+20) continue;
+                    ctx.beginPath(); ctx.arc(sx,sy,m.radius,0,Math.PI*2);
+                    ctx.fillStyle = '#ff6600';
+                    ctx.fill();
+                    ctx.beginPath(); ctx.arc(sx - m.vx * 0.02, sy - m.vy * 0.02, m.radius * 0.6, 0, Math.PI*2);
+                    ctx.fillStyle = '#ff9933'; ctx.fill();
+                }
+                for (const en of enemies) {
+                    const sx = en.x - cameraX, sy = en.y - cameraY;
+                    if (sx<-40||sx>VIEW_W+40||sy<-40||sy>VIEW_H+40) continue;
+                    let bodyColor;
+                    if (en.isDarkRed) bodyColor = '#5a1a1a';
+                    else if (en.specialType === 'green') bodyColor = '#00cc44';
+                    else if (en.specialType === 'blue') bodyColor = '#3366ff';
+                    else {
+                        switch(en.hp) {
+                            case 3: bodyColor = '#ff3333'; break;
+                            case 2: bodyColor = '#ff9933'; break;
+                            case 1: bodyColor = '#ffdd44'; break;
+                            default: bodyColor = '#fff';
+                        }
+                    }
+                    ctx.beginPath(); ctx.arc(sx, sy, en.radius, 0, Math.PI*2);
+                    ctx.fillStyle = bodyColor; ctx.fill();
+                    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+                    ctx.font = 'bold 12px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+                    ctx.fillText('●'.repeat(en.hp), sx, sy - en.radius - 6);
+                }
+                if (bossActive && boss) {
+                    const sx = boss.x - cameraX, sy = boss.y - cameraY;
+                    if (boss.type === 'white') {
+                        ctx.save();
+                        ctx.shadowColor='rgba(255,255,255,0.9)'; ctx.shadowBlur=18;
+                        ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
+                        ctx.fillStyle='#ffffff'; ctx.fill();
+                        ctx.restore();
+                        ctx.strokeStyle='#cccccc'; ctx.lineWidth=3; ctx.stroke();
+                        ctx.font='bold 12px "Courier New"'; ctx.fillStyle='#000'; ctx.textAlign='center';
+                        ctx.fillText('WHITE BOSS', sx, sy-14);
+                    } else {
+                        ctx.fillStyle = '#0a0a0a';
+                        ctx.beginPath(); ctx.arc(sx, sy, boss.radius, 0, 2*Math.PI);
+                        ctx.fill();
+                        ctx.strokeStyle = '#333333'; ctx.lineWidth = 4; ctx.stroke();
+                        ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 14px "Courier New"'; ctx.textAlign = 'center';
+                        ctx.fillText('BLACK BOSS', sx, sy - boss.radius - 10);
+                    }
+                }
+                const pScreenX = player.x - cameraX, pScreenY = player.y - cameraY;
+                ctx.save(); ctx.translate(pScreenX, pScreenY);
+                const aimAngle = Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x);
+                ctx.rotate(aimAngle);
+                ctx.beginPath(); ctx.moveTo(player.radius,0); ctx.lineTo(-player.radius*0.7,-player.radius*0.6);
+                ctx.lineTo(-player.radius*0.4,0); ctx.lineTo(-player.radius*0.7,player.radius*0.6);
+                ctx.closePath(); ctx.fillStyle='#ffffff'; ctx.fill(); ctx.strokeStyle='#aaaacc'; ctx.lineWidth=2; ctx.stroke();
+                ctx.restore();
+
+                if (timeScale < 1.0) {
+                    const alpha = (1 - (timeScale - 0.1) / 0.9) * 0.25;
+                    ctx.fillStyle = `rgba(20, 40, 100, ${alpha})`;
+                    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+                }
+
+                // Energy ring at bottom center
+                const ringCenterX = VIEW_W / 2;
+                const ringCenterY = VIEW_H - 35;
+                const ringRadius = 22;
+                const energyPercent = slowEnergy / SLOW_MAX_ENERGY;
+                let ringOpacity = 0.4;
+                if (!slowMode && slowEnergy >= SLOW_MAX_ENERGY - 0.01) {
+                    ringOpacity = 0.08;
+                } else {
+                    ringOpacity = 0.4;
+                }
+                ctx.beginPath();
+                ctx.arc(ringCenterX, ringCenterY, ringRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(128, 128, 128, ${ringOpacity * 0.6})`;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                if (energyPercent > 0) {
+                    ctx.beginPath();
+                    const endAngle = -Math.PI/2 + (Math.PI * 2 * energyPercent);
+                    ctx.arc(ringCenterX, ringCenterY, ringRadius, -Math.PI/2, endAngle);
+                    ctx.strokeStyle = slowMode ? `rgba(255, 170, 0, ${ringOpacity})` : `rgba(0, 221, 255, ${ringOpacity})`;
+                    ctx.lineWidth = 4;
+                    ctx.stroke();
+                }
+
+                if (bossActive && boss) {
+                    const bx = boss.x - cameraX, by = boss.y - cameraY;
+                    const margin = 50;
+                    const isOffLeft = bx < margin, isOffRight = bx > VIEW_W - margin;
+                    const isOffTop = by < margin, isOffBottom = by > VIEW_H - margin;
+                    if (isOffLeft || isOffRight || isOffTop || isOffBottom) {
+                        const arrowColor = 'rgba(255, 100, 100, 0.9)';
+                        function drawArrow(x, y, angle) {
+                            ctx.save();
+                            ctx.translate(x, y);
+                            ctx.rotate(angle);
+                            ctx.beginPath();
+                            ctx.moveTo(0, -10);
+                            ctx.lineTo(15, 0);
+                            ctx.lineTo(0, 10);
+                            ctx.closePath();
+                            ctx.fillStyle = arrowColor;
+                            ctx.fill();
+                            ctx.strokeStyle = '#fff';
+                            ctx.lineWidth = 2;
+                            ctx.stroke();
+                            ctx.restore();
+                        }
+                        if (isOffLeft) drawArrow(20, clamp(by, 50, VIEW_H-50), Math.PI*0.0);
+                        if (isOffRight) drawArrow(VIEW_W-20, clamp(by, 50, VIEW_H-50), Math.PI);
+                        if (isOffTop) drawArrow(clamp(bx, 50, VIEW_W-50), 20, Math.PI*1.5);
+                        if (isOffBottom) drawArrow(clamp(bx, 50, VIEW_W-50), VIEW_H-20, Math.PI*0.5);
+                    }
+                }
+                if (bossActive && boss && boss.type === 'black') {
+                    const barWidth = 300, barHeight = 20;
+                    const barX = VIEW_W/2 - barWidth/2, barY = 20;
+                    const fillPercent = boss.hp / boss.maxHp;
+                    ctx.fillStyle = '#222';
+                    ctx.fillRect(barX, barY, barWidth, barHeight);
+                    ctx.fillStyle = '#cc2222';
+                    ctx.fillRect(barX, barY, barWidth * fillPercent, barHeight);
+                    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+                    ctx.strokeRect(barX, barY, barWidth, barHeight);
+                    ctx.fillStyle = '#fff'; ctx.font = '14px "Courier New"'; ctx.textAlign = 'center';
+                    ctx.fillText('BLACK BOSS', VIEW_W/2, barY - 6);
+                }
+                ctx.font = '18px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+                ctx.fillText('SCORE: ' + score, 20, 60);
+                ctx.fillText('KILLS: ' + killCount + ' / 25', 20, 85);
+                ctx.fillText('TIME FLOW: ' + (timeScale*100).toFixed(0) + '%', 20, 110);
+                if (bossActive) {
+                    ctx.fillStyle = '#ffaaaa'; ctx.font = 'bold 22px "Courier New"'; ctx.textAlign = 'center';
+                    ctx.fillText('⚠ BOSS ⚠', VIEW_W/2, 60);
+                }
+                ctx.beginPath();
+                ctx.moveTo(mouseCanvasX-12, mouseCanvasY); ctx.lineTo(mouseCanvasX+12, mouseCanvasY);
+                ctx.moveTo(mouseCanvasX, mouseCanvasY-12); ctx.lineTo(mouseCanvasX, mouseCanvasY+12);
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+                if (gameState === 'gameover') {
+                    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VIEW_W,VIEW_H);
+                    ctx.fillStyle = '#ff4455'; ctx.font = 'bold 48px "Courier New"'; ctx.textAlign = 'center';
+                    ctx.fillText('TIME\'S UP', VIEW_W/2, VIEW_H/2-30);
+                    ctx.fillStyle = '#fff'; ctx.font = '22px "Courier New"';
+                    ctx.fillText('SCORE: ' + score, VIEW_W/2, VIEW_H/2+20);
+                    ctx.fillText('PRESS [R] TO RESTART', VIEW_W/2, VIEW_H/2+60);
+                }
+            }
+
+            function gameLoop(now) {
+                const realDeltaMs = Math.min(now - lastRealTime, 50);
+                lastRealTime = now;
+                const realDeltaSec = realDeltaMs / 1000;
+                if (gameState === 'playing') update(realDeltaSec);
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            window.addEventListener('keydown', (e) => {
+                const rawKey = e.key;
+                const k = rawKey.toLowerCase();
+                if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
+                    keys[k] = true; e.preventDefault();
+                } else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') {
+                    keys[rawKey] = true; e.preventDefault();
+                }
+                if (rawKey === 'Shift' && slowEnergy > 0) {
+                    const wasSlow = slowMode;
+                    slowMode = !slowMode;
+                    if (!wasSlow && slowMode) {
+                        // just activated
+                    } else if (wasSlow && !slowMode) {
+                        rechargeDelay = SLOW_RECHARGE_DELAY;
+                    }
+                    e.preventDefault();
+                }
+                if (k === 'r' && gameState === 'gameover') {
+                    restartGame();
+                    e.preventDefault();
+                }
+                initAudio();
+            });
+            window.addEventListener('keyup', (e) => {
+                const rawKey = e.key;
+                const k = rawKey.toLowerCase();
+                if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
+                    keys[k] = false; e.preventDefault();
+                } else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') {
+                    keys[rawKey] = false; e.preventDefault();
+                }
+            });
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                mouseCanvasX = e.clientX - rect.left;
+                mouseCanvasY = e.clientY - rect.top;
+            });
+            canvas.addEventListener('mousedown', (e) => {
+                if (e.button === 0) {
+                    mouseDown = true;
+                    if (gameState === 'menu') {
+                        const rect = canvas.getBoundingClientRect();
+                        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+                        const btnW = 200, btnH = 50, startY = 300, gap = 30;
+                        const buttons = [{y:startY,diff:'easy'},{y:startY+btnH+gap,diff:'medium'},{y:startY+(btnH+gap)*2,diff:'hard'}];
+                        for (const btn of buttons) {
+                            if (mx > VIEW_W/2-btnW/2 && mx < VIEW_W/2+btnW/2 && my > btn.y && my < btn.y+btnH) {
+                                difficulty = btn.diff; restartGame(); gameState = 'playing'; break;
+                            }
+                        }
+                    }
+                }
+                initAudio();
+            });
+            window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDown = false; });
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+            window.addEventListener('keydown', (e) => { if (e.key === 'Shift') e.preventDefault(); }, {passive: false});
+
+            applyDifficulty();
+            lastRealTime = performance.now();
+            requestAnimationFrame(gameLoop);
+        })();
+    </script>
+</body>
+</html>

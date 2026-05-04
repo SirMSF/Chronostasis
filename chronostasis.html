@@ -70,9 +70,9 @@
             const PLAYER_MAX_SPEED = 200;
             const PLAYER_ACCEL = 1000;
             const PLAYER_FRICTION = 500;
-            const PLAYER_SHOOT_COOLDOWN = 0.4;
+            const PLAYER_SHOOT_COOLDOWN = 0.35;
             const PLAYER_SPREAD = 0.04;
-            let PLAYER_BULLET_SPEED = 650;
+            const PLAYER_BULLET_SPEED = 750;
 
             const BULLET_RADIUS = 5;
             const ENEMY_BULLET_SPEED = 280;
@@ -84,10 +84,10 @@
             const MAX_ENEMIES = 15;
             const SPAWN_INTERVAL = 2.0;
 
-            const GREEN_SHOTGUN_COUNT = 3;
+            let GREEN_SHOTGUN_COUNT = 3;
             const GREEN_SHOTGUN_SPREAD = 0.4;
-            const BLUE_RAPID_COUNT = 3;
-            const BLUE_RAPID_DELAY = 0.12;
+            let BLUE_RAPID_COUNT = 4;            // increased from 3
+            let BLUE_RAPID_DELAY = 0.07;        // faster burst (was 0.12)
             const BLUE_RAPID_SPREAD = 0.05;
 
             const DODGE_DISTANCE = 45;
@@ -107,18 +107,22 @@
 
             const BBLACK_HP = 25;
             const BBLACK_SIZE = ENEMY_RADIUS * 1.6;
-            const BBLACK_MISSILE_COOLDOWN = 2.5;
+            const BBLACK_MISSILE_COOLDOWN = 1.8;
             const BBLACK_MISSILE_TURN_RATE = 3.0;
             const BBLACK_MISSILE_LIFESPAN = 3.0;
             const BBLACK_MISSILE_START_SPEED = ENEMY_BULLET_SPEED * 0.5;
             const BBLACK_MISSILE_END_SPEED = ENEMY_BULLET_SPEED * 0.9;
             const BBLACK_MISSILE_ACCEL_TIME = 2.5;
             const BBLACK_MISSILE_RADIUS = 8;
+            const BULLET_RING_COUNT = 12;
+            const BULLET_RING_SPEED = ENEMY_BULLET_SPEED * 0.7;
 
-            // Shift ability energy
             const SLOW_MAX_ENERGY = 7.0;
             const SLOW_RECHARGE_RATE = 0.5;
             const SLOW_RECHARGE_DELAY = 1.0;
+
+            // ---------- Intel message ----------
+            let intelMessage = null;
 
             // ---------- Grid & Walls ----------
             const CELL_SIZE = 60;
@@ -154,7 +158,6 @@
                 { x: 500, y: 1700, w: 300, h: 40 }
             ];
 
-            // ---------- Game State ----------
             let gameState = 'menu';
             let difficulty = 'medium';
             let score = 0;
@@ -169,10 +172,9 @@
             let rechargeDelay = 0;
             let bossEverDefeated = false;
 
-            // ---------- Debug ----------
             let debugMode = false;
-            let debugCodeString = '';          // used only on menu before debug enabled
-            let debugFocus = null;            // which input field is focused: 'kills', 'cash', 'score'
+            let debugCodeString = '';
+            let debugFocus = null;
             let debugInputs = { kills: '', cash: '', score: '' };
 
             let player = {
@@ -204,7 +206,6 @@
             let mouseDown = false;
             let lastRealTime = performance.now();
 
-            // ---------- Audio ----------
             let audioCtx = null;
             function initAudio() {
                 if (audioCtx) return;
@@ -274,8 +275,16 @@
                 const freq = 28 + speedRatio * 35; ambientOsc.frequency.setTargetAtTime(freq, audioCtx.currentTime, 0.15);
                 const gain = 0.01 + (1 - speedRatio) * 0.04; ambientGain.gain.setTargetAtTime(gain, audioCtx.currentTime, 0.15);
             }
+            function playTypewriterClick() {
+                if (!audioCtx) return;
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+                osc.type = 'square'; osc.frequency.value = 600 + Math.random() * 200;
+                gain.gain.setValueAtTime(0.05, now); gain.gain.exponentialRampToValueAtTime(0.001, now+0.03);
+                osc.connect(gain).connect(audioCtx.destination);
+                osc.start(now); osc.stop(now+0.03);
+            }
 
-            // ---------- Helpers ----------
             function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
             function dist(a, b) { const dx=a.x-b.x, dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
             function circleRectCollision(cx, cy, rad, rx, ry, rw, rh) {
@@ -349,21 +358,72 @@
                 return null;
             }
 
-            // ---------- Difficulty setup ----------
             function applyDifficulty() {
-                if (difficulty === 'easy') { PLAYER_BULLET_SPEED = 750; ENEMY_SPEED = 90; }
-                else if (difficulty === 'hard') { PLAYER_BULLET_SPEED = 650; ENEMY_SPEED = 135; }
-                else { PLAYER_BULLET_SPEED = 550; ENEMY_SPEED = 110; }
+                if (difficulty === 'easy') { ENEMY_SPEED = 90; }
+                else if (difficulty === 'hard') { ENEMY_SPEED = 135; }
+                else { ENEMY_SPEED = 110; }
             }
 
-            // ---------- Spawn helpers ----------
+            function wrapText(text, maxWidth, font) {
+                const words = text.split(' ');
+                const lines = [];
+                let currentLine = '';
+                ctx.font = font;
+                for (let word of words) {
+                    const testLine = currentLine ? currentLine + ' ' + word : word;
+                    const metrics = ctx.measureText(testLine);
+                    if (metrics.width > maxWidth && currentLine) {
+                        lines.push(currentLine);
+                        currentLine = word;
+                    } else {
+                        currentLine = testLine;
+                    }
+                }
+                if (currentLine) lines.push(currentLine);
+                return lines;
+            }
+
+            function triggerIntelMessage(text) {
+                const fontSize = 14;
+                const font = `bold ${fontSize}px "Courier New"`;
+                const boxWidth = 660;
+                const boxPadding = 12;
+                const maxTextWidth = boxWidth - boxPadding * 2;
+                const lines = wrapText(text, maxTextWidth, font);
+                const lineHeight = fontSize + 6;
+                const boxHeight = lines.length * lineHeight + boxPadding * 2;
+                const boxX = VIEW_W / 2 - boxWidth / 2;
+                const boxY = 130;  // lowered from 90
+
+                intelMessage = {
+                    text: text,
+                    lines: lines,
+                    font: font,
+                    fontSize: fontSize,
+                    currentLength: 0,
+                    totalChars: text.length,
+                    timer: 0,
+                    charInterval: 0.04,
+                    phase: 'typing',
+                    stayTimer: 2.0,
+                    fadeTimer: 0.6,
+                    alpha: 1,
+                    boxX: boxX,
+                    boxY: boxY,
+                    boxWidth: boxWidth,
+                    boxHeight: boxHeight,
+                    boxPadding: boxPadding,
+                    lineHeight: lineHeight,
+                };
+            }
+
             function getHPDistribution() {
                 if (difficulty === 'easy') return [1,1,1,2,2,3];
                 if (difficulty === 'hard') return [1,2,2,3,3,3];
                 return [1,1,2,2,3];
             }
 
-            function spawnSpecialEnemy(type) {
+            function spawnSpecialEnemy(type, cooldownMult = 1.3) {
                 const margin=40; let x,y, attempts=0;
                 do {
                     const side=Math.floor(Math.random()*4);
@@ -376,7 +436,7 @@
                 } while (pointInWall(x,y) && attempts++<100);
                 return {
                     x, y, radius: ENEMY_RADIUS, speed: ENEMY_SPEED, hp: 2, maxHp: 2,
-                    shootCooldown: ENEMY_SHOOT_COOLDOWN * 1.3,
+                    shootCooldown: ENEMY_SHOOT_COOLDOWN * cooldownMult,
                     shootTimer: Math.random() * ENEMY_SHOOT_COOLDOWN,
                     path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: false,
                     specialType: type, burstCount: 0, burstTimer: 0, burstActive: false
@@ -392,7 +452,8 @@
                     else specialChance = 0.35;
                     if (Math.random() < specialChance) {
                         const type = Math.random() < 0.5 ? 'green' : 'blue';
-                        enemies.push(spawnSpecialEnemy(type));
+                        const mult = type === 'blue' ? 0.9 : 1.3; // blue fires faster
+                        enemies.push(spawnSpecialEnemy(type, mult));
                         return;
                     }
                 }
@@ -412,7 +473,8 @@
                     x, y, radius: ENEMY_RADIUS, speed: ENEMY_SPEED, hp, maxHp: hp,
                     shootCooldown: ENEMY_SHOOT_COOLDOWN,
                     shootTimer: Math.random()*ENEMY_SHOOT_COOLDOWN,
-                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: false, specialType: null
+                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: false, specialType: null,
+                    missileTimer: 0
                 });
             }
 
@@ -432,7 +494,8 @@
                     x, y, radius: ENEMY_RADIUS*1.2, speed: ENEMY_SPEED*0.9, hp:4, maxHp:4,
                     shootCooldown: ENEMY_SHOOT_COOLDOWN,
                     shootTimer: Math.random()*ENEMY_SHOOT_COOLDOWN,
-                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: true, specialType: null
+                    path:[], pathIndex:0, pathFrameCounter:0, isDarkRed: true, specialType: null,
+                    missileTimer: 3 + Math.random() * 2
                 });
                 if (audioCtx) {
                     const now=audioCtx.currentTime;
@@ -459,9 +522,11 @@
                 boss = {
                     x, y, radius: BBLACK_SIZE, speed: ENEMY_SPEED * 1.0,
                     hp: BBLACK_HP, maxHp: BBLACK_HP, type: 'black',
-                    missileTimer: BBLACK_MISSILE_COOLDOWN * 0.5, orbitDir: 1
+                    missileTimer: BBLACK_MISSILE_COOLDOWN * 0.5, orbitDir: 1,
+                    missileCount: 0
                 };
                 playBossSpawn();
+                triggerIntelMessage("INTEL: The Shadow Sentinel utilizes lock-on ordnance. Neutralize incoming missiles to survive.");
             }
 
             function spawnWhiteBoss() {
@@ -484,9 +549,11 @@
                     isDashing: false, dashProgress: 0,
                     dashStartPos: {x:0, y:0}, dashTargetPos: {x:0, y:0},
                     shotCount: 0, specialType: 0, specialActive: false,
-                    specialStep: 0, specialTimer: 0, orbitDir: 1
+                    specialStep: 0, specialTimer: 0, orbitDir: 1,
+                    dodgeCount: 0          // guaranteed dodges
                 };
                 playBossSpawn();
+                triggerIntelMessage("INTEL: The Pale Spectre is highly agile. Sustain suppressive fire until an opening appears.");
             }
 
             function restartGame() {
@@ -499,21 +566,19 @@
                 spawnTimer=0; slowMode = false;
                 slowEnergy = SLOW_MAX_ENERGY; rechargeDelay = 0;
                 deathAnimation = null; controlsFrozen = false;
+                intelMessage = null;
                 applyDifficulty();
                 gameState='playing';
                 for (let i=0;i<5;i++) spawnEnemy();
             }
 
-            // ---------- Boss death animation ----------
             function startBossDeathAnimation() {
                 if (!boss) return;
-
                 player.vx = 0;
                 player.vy = 0;
                 controlsFrozen = true;
                 bullets = [];
                 missiles = [];
-
                 deathAnimation = {
                     active: true,
                     phase: 'freeze',
@@ -544,7 +609,30 @@
                 }
             }
 
-            // ---------- Debug Helpers ----------
+            function killAllEnemies() {
+                for (const en of enemies) {
+                    if (en.isDarkRed) cash += 5;
+                    else if (en.specialType === 'green' || en.specialType === 'blue') cash += 3;
+                    else cash += en.maxHp;
+                    score += 100 * en.maxHp;
+                    killCount++;
+                }
+                enemies = [];
+                if (bossActive && boss) {
+                    cash += 10;
+                    score += boss.type === 'black' ? 1500 : 500;
+                    boss = null;
+                    bossActive = false;
+                    bossEverDefeated = true;
+                    bossType = bossType === 'black' ? 'white' : 'black';
+                    killCount = 0;
+                }
+                bullets = [];
+                missiles = [];
+                deathAnimation = null;
+                controlsFrozen = false;
+            }
+
             function applyDebugValues() {
                 const killsVal = parseInt(debugInputs.kills, 10);
                 const cashVal = parseInt(debugInputs.cash, 10);
@@ -552,23 +640,45 @@
                 if (!isNaN(killsVal) && killsVal >= 0) killCount = killsVal;
                 if (!isNaN(cashVal) && cashVal >= 0) cash = cashVal;
                 if (!isNaN(scoreVal) && scoreVal >= 0) score = scoreVal;
-                // Update the input fields to reflect current values
                 debugInputs.kills = killCount.toString();
                 debugInputs.cash = cash.toString();
                 debugInputs.score = score.toString();
                 debugFocus = null;
             }
 
-            // ---------- Update ----------
             function update(realDeltaSec) {
                 if (gameState !== 'playing') return;
 
+                if (intelMessage) {
+                    const msg = intelMessage;
+                    if (msg.phase === 'typing') {
+                        msg.timer += realDeltaSec;
+                        while (msg.timer >= msg.charInterval && msg.currentLength < msg.totalChars) {
+                            msg.currentLength++;
+                            msg.timer -= msg.charInterval;
+                            playTypewriterClick();
+                        }
+                        if (msg.currentLength >= msg.totalChars) {
+                            msg.phase = 'done';
+                            msg.stayTimer = 2.0;
+                        }
+                    } else if (msg.phase === 'done') {
+                        msg.stayTimer -= realDeltaSec;
+                        if (msg.stayTimer <= 0) {
+                            msg.phase = 'fading';
+                            msg.fadeTimer = 0.6;
+                        }
+                    } else if (msg.phase === 'fading') {
+                        msg.fadeTimer -= realDeltaSec;
+                        msg.alpha = Math.max(0, msg.fadeTimer / 0.6);
+                        if (msg.fadeTimer <= 0) intelMessage = null;
+                    }
+                }
+
                 if (deathAnimation && deathAnimation.active) {
                     deathAnimation.timer += realDeltaSec;
-                    player.vx = 0;
-                    player.vy = 0;
+                    player.vx = 0; player.vy = 0;
                     controlsFrozen = true;
-
                     if (deathAnimation.phase === 'freeze') {
                         deathAnimation.boss.x = deathAnimation.bossStartPos.x;
                         deathAnimation.boss.y = deathAnimation.bossStartPos.y;
@@ -576,8 +686,7 @@
                             deathAnimation.phase = 'shake';
                             deathAnimation.timer = 0;
                         }
-                    }
-                    else if (deathAnimation.phase === 'shake') {
+                    } else if (deathAnimation.phase === 'shake') {
                         deathAnimation.shakeOffsetX = (Math.random() - 0.5) * 12;
                         deathAnimation.shakeOffsetY = (Math.random() - 0.5) * 12;
                         if (deathAnimation.timer >= deathAnimation.shakeDuration) {
@@ -585,8 +694,7 @@
                             const bossRef = deathAnimation.boss;
                             score += (bossRef.type === 'black' ? 1500 : 500);
                             cash += 10;
-                            bossActive = false;
-                            boss = null;
+                            bossActive = false; boss = null;
                             killCount = 0;
                             bossEverDefeated = true;
                             bossType = bossType === 'black' ? 'white' : 'black';
@@ -811,21 +919,53 @@
                     } else if (b.type === 'black') {
                         b.missileTimer -= bossDelta;
                         if (b.missileTimer <= 0) {
-                            const baseAngle = Math.atan2(player.y - b.y, player.x - b.x);
-                            const perpAngle = baseAngle + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
-                            missiles.push({
-                                x: b.x, y: b.y,
-                                vx: Math.cos(perpAngle) * BBLACK_MISSILE_START_SPEED,
-                                vy: Math.sin(perpAngle) * BBLACK_MISSILE_START_SPEED,
-                                radius: BBLACK_MISSILE_RADIUS,
-                                life: BBLACK_MISSILE_LIFESPAN,
-                                age: 0,
-                                accelerating: true,
-                                startSpeed: BBLACK_MISSILE_START_SPEED,
-                                endSpeed: BBLACK_MISSILE_END_SPEED,
-                                accelTime: BBLACK_MISSILE_ACCEL_TIME,
-                                turnRate: BBLACK_MISSILE_TURN_RATE
-                            });
+                            b.missileCount = (b.missileCount || 0) + 1;
+                            if (b.missileCount % 5 === 0) {
+                                const baseAngle = Math.atan2(player.y - b.y, player.x - b.x);
+                                for (let i = 0; i < 2; i++) {
+                                    const angle = baseAngle + Math.PI * i;
+                                    missiles.push({
+                                        x: b.x, y: b.y,
+                                        vx: Math.cos(angle) * BBLACK_MISSILE_START_SPEED,
+                                        vy: Math.sin(angle) * BBLACK_MISSILE_START_SPEED,
+                                        radius: BBLACK_MISSILE_RADIUS,
+                                        life: BBLACK_MISSILE_LIFESPAN,
+                                        age: 0,
+                                        accelerating: true,
+                                        startSpeed: BBLACK_MISSILE_START_SPEED,
+                                        endSpeed: BBLACK_MISSILE_END_SPEED,
+                                        accelTime: BBLACK_MISSILE_ACCEL_TIME,
+                                        turnRate: BBLACK_MISSILE_TURN_RATE
+                                    });
+                                }
+                            } else if (b.missileCount % 3 === 0) {
+                                const ringAngle = Math.atan2(player.y - b.y, player.x - b.x);
+                                for (let i = 0; i < BULLET_RING_COUNT; i++) {
+                                    const angle = ringAngle + (i / BULLET_RING_COUNT) * Math.PI * 2;
+                                    bullets.push({
+                                        x: b.x, y: b.y,
+                                        vx: Math.cos(angle) * BULLET_RING_SPEED,
+                                        vy: Math.sin(angle) * BULLET_RING_SPEED,
+                                        radius: BULLET_RADIUS,
+                                        owner: 'enemy'
+                                    });
+                                }
+                            } else {
+                                const perpAngle = Math.atan2(player.y - b.y, player.x - b.x) + (Math.random() < 0.5 ? Math.PI/2 : -Math.PI/2);
+                                missiles.push({
+                                    x: b.x, y: b.y,
+                                    vx: Math.cos(perpAngle) * BBLACK_MISSILE_START_SPEED,
+                                    vy: Math.sin(perpAngle) * BBLACK_MISSILE_START_SPEED,
+                                    radius: BBLACK_MISSILE_RADIUS,
+                                    life: BBLACK_MISSILE_LIFESPAN,
+                                    age: 0,
+                                    accelerating: true,
+                                    startSpeed: BBLACK_MISSILE_START_SPEED,
+                                    endSpeed: BBLACK_MISSILE_END_SPEED,
+                                    accelTime: BBLACK_MISSILE_ACCEL_TIME,
+                                    turnRate: BBLACK_MISSILE_TURN_RATE
+                                });
+                            }
                             b.missileTimer = BBLACK_MISSILE_COOLDOWN;
                         }
                     }
@@ -940,6 +1080,28 @@
                             enemy.x = clamp(enemy.x, enemy.radius, WORLD_WIDTH-enemy.radius);
                             enemy.y = clamp(enemy.y, enemy.radius, WORLD_HEIGHT-enemy.radius);
 
+                            // Dark red enemy missile attack (larger missiles)
+                            if (enemy.isDarkRed) {
+                                enemy.missileTimer = (enemy.missileTimer || 3) - gameDelta;
+                                if (enemy.missileTimer <= 0 && dist(enemy, player) < 800) {
+                                    const angle = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                                    missiles.push({
+                                        x: enemy.x, y: enemy.y,
+                                        vx: Math.cos(angle) * BBLACK_MISSILE_START_SPEED * 0.8,
+                                        vy: Math.sin(angle) * BBLACK_MISSILE_START_SPEED * 0.8,
+                                        radius: BBLACK_MISSILE_RADIUS * 1.0,   // bigger
+                                        life: BBLACK_MISSILE_LIFESPAN * 0.8,
+                                        age: 0,
+                                        accelerating: true,
+                                        startSpeed: BBLACK_MISSILE_START_SPEED * 0.8,
+                                        endSpeed: BBLACK_MISSILE_END_SPEED * 0.7,
+                                        accelTime: BBLACK_MISSILE_ACCEL_TIME * 0.7,
+                                        turnRate: BBLACK_MISSILE_TURN_RATE * 0.8
+                                    });
+                                    enemy.missileTimer = 4 + Math.random() * 2;
+                                }
+                            }
+
                             if (enemy.specialType === 'green') {
                                 enemy.shootTimer -= gameDelta;
                                 if (enemy.shootTimer <= 0 && dist(enemy, player) < 700) {
@@ -964,7 +1126,7 @@
                                     if (enemy.shootTimer <= 0 && dist(enemy, player) < 700) {
                                         if (hasLineOfSight(enemy.x, enemy.y, player.x, player.y)) {
                                             enemy.burstActive = true;
-                                            enemy.burstCount = BLUE_RAPID_COUNT;
+                                            enemy.burstCount = BLUE_RAPID_COUNT;  // now 4
                                             enemy.burstTimer = 0;
                                         }
                                     }
@@ -982,7 +1144,7 @@
                                             });
                                         }
                                         enemy.burstCount--;
-                                        enemy.burstTimer += BLUE_RAPID_DELAY;
+                                        enemy.burstTimer += BLUE_RAPID_DELAY;  // 0.07
                                     }
                                     if (enemy.burstCount <= 0) {
                                         enemy.burstActive = false;
@@ -1015,7 +1177,9 @@
                             if (bullet.owner !== 'player') continue;
                             if (dist(bullet, boss) < proximityThreshold) {
                                 if (boss.type === 'white' && !boss.isDashing) {
-                                    if (Math.random() < 0.93) {
+                                    const doDodge = (boss.dodgeCount < 5) ? true : (Math.random() < 0.93);
+                                    if (doDodge) {
+                                        if (boss.dodgeCount < 5) boss.dodgeCount++;
                                         const perpX = -bullet.vy, perpY = bullet.vx;
                                         const len = Math.sqrt(perpX*perpX+perpY*perpY) || 1;
                                         let dirX = perpX / len, dirY = perpY / len;
@@ -1029,7 +1193,6 @@
                                         };
                                         boss.dashTargetPos.x = clamp(boss.dashTargetPos.x, boss.radius, WORLD_WIDTH - boss.radius);
                                         boss.dashTargetPos.y = clamp(boss.dashTargetPos.y, boss.radius, WORLD_HEIGHT - boss.radius);
-                                        bullets.splice(b,1);
                                         break;
                                     }
                                 }
@@ -1074,13 +1237,9 @@
                     for (const eIdx of enemiesToRemove.sort((a,b)=>b-a)) {
                         if (eIdx >= 0 && eIdx < enemies.length) {
                             const deadEnemy = enemies[eIdx];
-                            if (deadEnemy.isDarkRed) {
-                                cash += 5;
-                            } else if (deadEnemy.specialType === 'green' || deadEnemy.specialType === 'blue') {
-                                cash += 3;
-                            } else {
-                                cash += deadEnemy.maxHp;
-                            }
+                            if (deadEnemy.isDarkRed) cash += 5;
+                            else if (deadEnemy.specialType === 'green' || deadEnemy.specialType === 'blue') cash += 3;
+                            else cash += deadEnemy.maxHp;
                             score += 100 * deadEnemy.maxHp;
                             killCount++;
                             enemies.splice(eIdx, 1);
@@ -1089,7 +1248,7 @@
                                 nextDarkRedScore += 1500;
                                 spawnDarkRed();
                             }
-                            if (!bossActive && killCount >= 25) {
+                            if (!bossActive && killCount >= 20) {
                                 if (bossType === 'black') spawnBlackBoss();
                                 else spawnWhiteBoss();
                             }
@@ -1143,92 +1302,20 @@
                 mouseWorldY = mouseCanvasY + cameraY;
             }
 
-            // ---------- Render ----------
-            function drawDebugPanel() {
-                if (!debugMode) return;
-                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
-                // Background
-                ctx.fillStyle = 'rgba(20, 20, 40, 0.85)';
-                ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
-                ctx.strokeStyle = '#555';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
-
-                // Title
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 14px "Courier New"';
-                ctx.textAlign = 'left';
-                ctx.fillText('DEBUG MODE', panel.x + 10, panel.y + 20);
-
-                // Input fields
-                ctx.font = '13px "Courier New"';
-                const labels = ['Kills:', 'Cash:', 'Score:'];
-                const keys = ['kills', 'cash', 'score'];
-                for (let i = 0; i < 3; i++) {
-                    const y = panel.y + 40 + i * 30;
-                    ctx.fillStyle = '#ccc';
-                    ctx.fillText(labels[i], panel.x + 10, y + 15);
-                    const inputX = panel.x + 70;
-                    const inputY = y;
-                    const inputW = 150;
-                    const inputH = 20;
-
-                    // Input box
-                    ctx.fillStyle = '#111';
-                    ctx.fillRect(inputX, inputY, inputW, inputH);
-                    ctx.strokeStyle = debugFocus === keys[i] ? '#90EE90' : '#444';
-                    ctx.lineWidth = 1;
-                    ctx.strokeRect(inputX, inputY, inputW, inputH);
-
-                    // Text inside
-                    ctx.fillStyle = '#90EE90';
-                    ctx.textAlign = 'left';
-                    let displayVal = debugInputs[keys[i]];
-                    if (debugFocus === keys[i]) displayVal += '_';
-                    ctx.fillText(displayVal, inputX + 5, inputY + 15);
-                }
-
-                // Set button
-                const btnX = panel.x + 60;
-                const btnY = panel.y + 115;
-                const btnW = 120;
-                const btnH = 25;
-                ctx.fillStyle = '#2a4a2a';
-                ctx.fillRect(btnX, btnY, btnW, btnH);
-                ctx.strokeStyle = '#90EE90';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(btnX, btnY, btnW, btnH);
-                ctx.fillStyle = '#fff';
-                ctx.font = 'bold 14px "Courier New"';
-                ctx.textAlign = 'center';
-                ctx.fillText('SET', btnX + btnW/2, btnY + 18);
-            }
-
-            function isInsideDebugPanel(mx, my) {
-                if (!debugMode) return false;
-                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
-                return mx >= panel.x && mx <= panel.x + panel.w && my >= panel.y && my <= panel.y + panel.h;
-            }
-
-            function getDebugFieldAt(mx, my) {
-                const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 145 };
-                const fieldH = 20;
-                const keys = ['kills', 'cash', 'score'];
-                for (let i = 0; i < 3; i++) {
-                    const y = panel.y + 40 + i * 30;
-                    const inputX = panel.x + 70;
-                    if (mx >= inputX && mx <= inputX + 150 && my >= y && my <= y + fieldH) {
-                        return keys[i];
-                    }
-                }
-                // Check SET button
-                const btnX = panel.x + 60;
-                const btnY = panel.y + 115;
-                const btnW = 120, btnH = 25;
-                if (mx >= btnX && mx <= btnX + btnW && my >= btnY && my <= btnY + btnH) {
-                    return 'set';
-                }
-                return null;
+            // helper for rounded rectangles
+            function fillRoundedRect(x, y, w, h, r) {
+                ctx.beginPath();
+                ctx.moveTo(x + r, y);
+                ctx.lineTo(x + w - r, y);
+                ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+                ctx.lineTo(x + w, y + h - r);
+                ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+                ctx.lineTo(x + r, y + h);
+                ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+                ctx.lineTo(x, y + r);
+                ctx.quadraticCurveTo(x, y, x + r, y);
+                ctx.closePath();
+                ctx.fill();
             }
 
             function draw() {
@@ -1260,17 +1347,28 @@
                     ctx.fillStyle = '#aaa'; ctx.font = '16px "Courier New"';
                     ctx.fillText('Click difficulty to start', VIEW_W/2, startY+(btnH+gap)*3+30);
 
-                    // Debug code input (only if not already debug mode)
+                    const controlsX = VIEW_W - 260, controlsY = VIEW_H - 140;
+                    ctx.fillStyle = 'rgba(20,20,40,0.85)';
+                    ctx.fillRect(controlsX, controlsY, 250, 120);
+                    ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+                    ctx.strokeRect(controlsX, controlsY, 250, 120);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '14px "Courier New"';
+                    ctx.textAlign = 'left';
+                    let cy = controlsY + 20;
+                    ctx.fillText('WASD = Movement', controlsX + 10, cy); cy += 22;
+                    ctx.fillText('MB1 = Shoot', controlsX + 10, cy); cy += 22;
+                    ctx.fillText('Shift = Slow ability', controlsX + 10, cy); cy += 22;
+                    ctx.fillText('Q, E, R = Extra (WIP)', controlsX + 10, cy);
+
                     if (!debugMode) {
                         ctx.fillStyle = '#444';
                         ctx.font = '12px "Courier New"';
                         ctx.textAlign = 'left';
                         ctx.fillText('Debug: ' + debugCodeString + '_', 10, 20);
                     }
-                    // If debug mode is on, panel is drawn later
                 }
 
-                // Game rendering only if playing or gameover
                 if (gameState === 'playing' || gameState === 'gameover') {
                     const gridSize = CELL_SIZE;
                     ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 1;
@@ -1375,6 +1473,31 @@
                         ctx.fillRect(0, 0, VIEW_W, VIEW_H);
                     }
 
+                    // Intel message box (now lower at Y=130)
+                    if (intelMessage) {
+                        const msg = intelMessage;
+                        ctx.globalAlpha = msg.alpha;
+                        ctx.fillStyle = 'rgba(10, 20, 30, 0.9)';
+                        ctx.fillRect(msg.boxX, msg.boxY, msg.boxWidth, msg.boxHeight);
+                        ctx.strokeStyle = '#33ffcc';
+                        ctx.lineWidth = 1.5;
+                        ctx.strokeRect(msg.boxX, msg.boxY, msg.boxWidth, msg.boxHeight);
+                        ctx.fillStyle = '#e0ffe0';
+                        ctx.font = msg.font;
+                        ctx.textAlign = 'left';
+                        let drawnChars = 0;
+                        for (let i = 0; i < msg.lines.length; i++) {
+                            const line = msg.lines[i];
+                            const charsInThisLine = Math.min(line.length, msg.currentLength - drawnChars);
+                            if (charsInThisLine <= 0) break;
+                            const substr = line.substring(0, charsInThisLine);
+                            const y = msg.boxY + msg.boxPadding + (i * msg.lineHeight) + msg.fontSize * 0.8;
+                            ctx.fillText(substr, msg.boxX + msg.boxPadding, y);
+                            drawnChars += charsInThisLine;
+                        }
+                        ctx.globalAlpha = 1;
+                    }
+
                     // Energy ring
                     const ringCenterX = VIEW_W / 2;
                     const ringCenterY = VIEW_H - 35;
@@ -1398,6 +1521,20 @@
                         ctx.strokeStyle = slowMode ? `rgba(255, 170, 0, ${ringOpacity})` : `rgba(0, 221, 255, ${ringOpacity})`;
                         ctx.lineWidth = 4;
                         ctx.stroke();
+                    }
+
+                    // Shot cooldown indicator (RPM) with rounded edges
+                    if (gameState === 'playing') {
+                        const shotBarWidth = 50, shotBarHeight = 6;
+                        const shotBarX = ringCenterX - shotBarWidth/2;
+                        const shotBarY = ringCenterY - 32;
+                        const shootPercent = Math.max(0, 1 - (player.shootTimer / PLAYER_SHOOT_COOLDOWN));
+                        ctx.fillStyle = '#333';
+                        fillRoundedRect(shotBarX, shotBarY, shotBarWidth, shotBarHeight, 3);
+                        if (shootPercent > 0) {
+                            ctx.fillStyle = '#ffdd44';
+                            fillRoundedRect(shotBarX, shotBarY, shotBarWidth * shootPercent, shotBarHeight, 3);
+                        }
                     }
 
                     if (bossActive && boss && !deathAnimation) {
@@ -1442,10 +1579,9 @@
                         ctx.fillStyle = '#fff'; ctx.font = '14px "Courier New"'; ctx.textAlign = 'center';
                         ctx.fillText('BLACK BOSS', VIEW_W/2, barY - 6);
                     }
-                    // Left-side UI
                     ctx.font = '18px "Courier New"'; ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
                     ctx.fillText('SCORE: ' + score, 20, 60);
-                    ctx.fillText('KILLS: ' + killCount + ' / 25', 20, 85);
+                    ctx.fillText('KILLS: ' + killCount + ' / 20', 20, 85);
                     ctx.fillText('TIME FLOW: ' + (timeScale*100).toFixed(0) + '%', 20, 110);
                     ctx.fillStyle = '#90EE90';
                     ctx.fillText('$ ' + cash, 20, 135);
@@ -1468,8 +1604,70 @@
                     }
                 }
 
-                // Draw debug panel on top of everything if active
-                drawDebugPanel();
+                // debug panel on top
+                if (debugMode) {
+                    const panel = { x: VIEW_W - 250, y: 10, w: 240, h: 180 };
+                    ctx.fillStyle = 'rgba(20, 20, 40, 0.85)';
+                    ctx.fillRect(panel.x, panel.y, panel.w, panel.h);
+                    ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+                    ctx.strokeRect(panel.x, panel.y, panel.w, panel.h);
+
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 14px "Courier New"';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('DEBUG MODE', panel.x + 10, panel.y + 20);
+
+                    ctx.font = '13px "Courier New"';
+                    const labels = ['Kills:', 'Cash:', 'Score:'];
+                    const keys = ['kills', 'cash', 'score'];
+                    for (let i = 0; i < 3; i++) {
+                        const y = panel.y + 40 + i * 30;
+                        ctx.fillStyle = '#ccc';
+                        ctx.fillText(labels[i], panel.x + 10, y + 15);
+                        const inputX = panel.x + 70;
+                        const inputY = y;
+                        const inputW = 150;
+                        const inputH = 20;
+
+                        ctx.fillStyle = '#111';
+                        ctx.fillRect(inputX, inputY, inputW, inputH);
+                        ctx.strokeStyle = debugFocus === keys[i] ? '#90EE90' : '#444';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(inputX, inputY, inputW, inputH);
+
+                        ctx.fillStyle = '#90EE90';
+                        ctx.textAlign = 'left';
+                        let displayVal = debugInputs[keys[i]];
+                        if (debugFocus === keys[i]) displayVal += '_';
+                        ctx.fillText(displayVal, inputX + 5, inputY + 15);
+                    }
+
+                    const btnSetX = panel.x + 60;
+                    const btnSetY = panel.y + 115;
+                    const btnSetW = 120, btnSetH = 25;
+                    ctx.fillStyle = '#2a4a2a';
+                    ctx.fillRect(btnSetX, btnSetY, btnSetW, btnSetH);
+                    ctx.strokeStyle = '#90EE90';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(btnSetX, btnSetY, btnSetW, btnSetH);
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 14px "Courier New"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('SET', btnSetX + btnSetW/2, btnSetY + 18);
+
+                    const btnKillX = panel.x + 30;
+                    const btnKillY = panel.y + 148;
+                    const btnKillW = 180, btnKillH = 25;
+                    ctx.fillStyle = '#4a1a1a';
+                    ctx.fillRect(btnKillX, btnKillY, btnKillW, btnKillH);
+                    ctx.strokeStyle = '#ff6666';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(btnKillX, btnKillY, btnKillW, btnKillH);
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 14px "Courier New"';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('KILL ALL', btnKillX + btnKillW/2, btnKillY + 18);
+                }
             }
 
             function gameLoop(now) {
@@ -1482,39 +1680,16 @@
             }
 
             window.addEventListener('keydown', (e) => {
-                // Debug input handling (when a debug field is focused)
                 if (debugMode && debugFocus !== null) {
-                    if (e.key === 'Backspace') {
-                        debugInputs[debugFocus] = debugInputs[debugFocus].slice(0, -1);
-                        e.preventDefault();
-                        return;
-                    }
-                    if (e.key === 'Enter') {
-                        applyDebugValues();
-                        e.preventDefault();
-                        return;
-                    }
-                    if (e.key === 'Escape') {
-                        debugFocus = null;
-                        e.preventDefault();
-                        return;
-                    }
-                    if (/^[0-9]$/.test(e.key)) {
-                        debugInputs[debugFocus] += e.key;
-                        e.preventDefault();
-                        return;
-                    }
-                    e.preventDefault();
-                    return;
+                    if (e.key === 'Backspace') { debugInputs[debugFocus] = debugInputs[debugFocus].slice(0, -1); e.preventDefault(); return; }
+                    if (e.key === 'Enter') { applyDebugValues(); e.preventDefault(); return; }
+                    if (e.key === 'Escape') { debugFocus = null; e.preventDefault(); return; }
+                    if (/^[0-9]$/.test(e.key)) { debugInputs[debugFocus] += e.key; e.preventDefault(); return; }
+                    e.preventDefault(); return;
                 }
 
-                // Secret debug code input on menu (before debug mode)
                 if (gameState === 'menu' && !debugMode) {
-                    if (e.key === 'Backspace') {
-                        debugCodeString = debugCodeString.slice(0, -1);
-                        e.preventDefault();
-                        return;
-                    }
+                    if (e.key === 'Backspace') { debugCodeString = debugCodeString.slice(0, -1); e.preventDefault(); return; }
                     if (e.key === 'Enter') {
                         if (debugCodeString === '676767') {
                             debugMode = true;
@@ -1522,51 +1697,31 @@
                             debugInputs.cash = cash.toString();
                             debugInputs.score = score.toString();
                             debugCodeString = '';
-                        } else {
-                            debugCodeString = '';
-                        }
-                        e.preventDefault();
-                        return;
+                        } else { debugCodeString = ''; }
+                        e.preventDefault(); return;
                     }
-                    if (/^[0-9]$/.test(e.key)) {
-                        debugCodeString += e.key;
-                        e.preventDefault();
-                        return;
-                    }
+                    if (/^[0-9]$/.test(e.key)) { debugCodeString += e.key; e.preventDefault(); return; }
                 }
 
-                // Normal game controls
                 const rawKey = e.key;
                 const k = rawKey.toLowerCase();
-                if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
-                    keys[k] = true; e.preventDefault();
-                } else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') {
-                    keys[rawKey] = true; e.preventDefault();
-                }
+                if (k === 'w' || k === 'a' || k === 's' || k === 'd') { keys[k] = true; e.preventDefault(); }
+                else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') { keys[rawKey] = true; e.preventDefault(); }
                 if (rawKey === 'Shift' && slowEnergy > 0 && !controlsFrozen && debugFocus === null) {
                     const wasSlow = slowMode;
                     slowMode = !slowMode;
-                    if (!wasSlow && slowMode) {
-                        // just activated
-                    } else if (wasSlow && !slowMode) {
-                        rechargeDelay = SLOW_RECHARGE_DELAY;
-                    }
+                    if (!wasSlow && slowMode) {}
+                    else if (wasSlow && !slowMode) { rechargeDelay = SLOW_RECHARGE_DELAY; }
                     e.preventDefault();
                 }
-                if (k === 'r' && gameState === 'gameover') {
-                    restartGame();
-                    e.preventDefault();
-                }
+                if (k === 'r' && gameState === 'gameover') { restartGame(); e.preventDefault(); }
                 initAudio();
             });
             window.addEventListener('keyup', (e) => {
                 const rawKey = e.key;
                 const k = rawKey.toLowerCase();
-                if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
-                    keys[k] = false; e.preventDefault();
-                } else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') {
-                    keys[rawKey] = false; e.preventDefault();
-                }
+                if (k === 'w' || k === 'a' || k === 's' || k === 'd') { keys[k] = false; e.preventDefault(); }
+                else if (rawKey === 'ArrowUp' || rawKey === 'ArrowLeft' || rawKey === 'ArrowDown' || rawKey === 'ArrowRight') { keys[rawKey] = false; e.preventDefault(); }
             });
             canvas.addEventListener('mousemove', (e) => {
                 const rect = canvas.getBoundingClientRect();
@@ -1576,27 +1731,26 @@
             canvas.addEventListener('mousedown', (e) => {
                 if (e.button === 0) {
                     const mx = mouseCanvasX, my = mouseCanvasY;
-
-                    // Debug panel interactions (priority)
-                    if (debugMode && isInsideDebugPanel(mx, my)) {
-                        const field = getDebugFieldAt(mx, my);
-                        if (field === 'set') {
-                            applyDebugValues();
-                        } else if (field) {
+                    if (debugMode && mx >= VIEW_W - 250 && mx <= VIEW_W - 10 && my >= 10 && my <= 190) {
+                        const field = (mx >= VIEW_W - 190 && mx <= VIEW_W - 40 && my >= 50 && my <= 70) ? 'kills' :
+                                     (mx >= VIEW_W - 190 && mx <= VIEW_W - 40 && my >= 80 && my <= 100) ? 'cash' :
+                                     (mx >= VIEW_W - 190 && mx <= VIEW_W - 40 && my >= 110 && my <= 130) ? 'score' : null;
+                        if (field) {
                             debugFocus = field;
-                            // Initialize field with current game values if empty
                             if (debugInputs[field] === '') {
                                 if (field === 'kills') debugInputs.kills = killCount.toString();
                                 else if (field === 'cash') debugInputs.cash = cash.toString();
                                 else if (field === 'score') debugInputs.score = score.toString();
                             }
+                        } else if (mx >= VIEW_W - 190 && mx <= VIEW_W - 70 && my >= 125 && my <= 150) {
+                            applyDebugValues();
+                        } else if (mx >= VIEW_W - 220 && mx <= VIEW_W - 40 && my >= 158 && my <= 183) {
+                            killAllEnemies();
+                            debugFocus = null;
                         }
-                        return; // Don't start game or shoot
-                    } else {
-                        // Click outside panel unfocuses
-                        debugFocus = null;
+                        return;
                     }
-
+                    debugFocus = null;
                     if (!controlsFrozen && debugFocus === null) mouseDown = true;
                     if (gameState === 'menu') {
                         const btnW = 200, btnH = 50, startY = 300, gap = 30;
